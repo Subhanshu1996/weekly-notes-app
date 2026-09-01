@@ -31,51 +31,33 @@ except ImportError:
 st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout="wide")
 
 # =========================================================
-# GOOGLE SHEETS BACKEND CONFIGURATION
+# GOOGLE SHEETS BACKEND CONFIGURATION (FIXED)
 # =========================================================
-ADMIN_EMAIL = "subhanshu.pant@factspan.com" # <--- CHANGE THIS TO YOUR EMAIL
-
 @st.cache_resource
 def get_gspread_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     return gspread.authorize(creds)
 
-def init_and_get_sheet():
-    client = get_gspread_client()
-    try:
-        spreadsheet = client.open("Weekly Notes Database")
-        sheet = spreadsheet.sheet1
-    except gspread.exceptions.SpreadsheetNotFound:
-        spreadsheet = client.create("Weekly Notes Database")
-        spreadsheet.share(ADMIN_EMAIL, perm_type='user', role='writer')
-        sheet = spreadsheet.sheet1
-        headers = [
-            "id", "Account", "Team", "Year", "Month", "Week", "Resource", 
-            "Project / Dashboard", "Business Owner", "Start date", 
-            "Initial Delivery date", "Updated Expected Delivery date", 
-            "Work Type", "Completion %", "Utilization %", "Status", 
-            "This Week Delivered", "Next Week Priority", "Blocker"
-        ]
-        sheet.append_row(headers)
-    return sheet
-
 def load_data_from_gsheets():
     try:
-        sheet = init_and_get_sheet()
+        client = get_gspread_client()
+        sheet = client.open("Weekly Notes Database").sheet1
         return sheet.get_all_records()
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets. Error: {e}")
         return []
 
 def save_new_notes_to_gsheets(new_entries):
-    sheet = init_and_get_sheet()
+    client = get_gspread_client()
+    sheet = client.open("Weekly Notes Database").sheet1
     headers = sheet.row_values(1)
     rows_to_append = [[str(entry.get(col, "")) for col in headers] for entry in new_entries]
     sheet.append_rows(rows_to_append)
 
 def update_existing_note_in_gsheets(updated_entry):
-    sheet = init_and_get_sheet()
+    client = get_gspread_client()
+    sheet = client.open("Weekly Notes Database").sheet1
     records = sheet.get_all_records()
     headers = sheet.row_values(1)
     for idx, row in enumerate(records):
@@ -608,7 +590,7 @@ if nav_selection == "✍️ Enter Notes":
                             st.rerun()
 
 # =========================================================
-# VIEW 2: WEEKLY SUMMARY (RESTORED FORMAT)
+# VIEW 2: WEEKLY SUMMARY
 # =========================================================
 elif nav_selection == "📋 Weekly Summary":
     if df.empty or filtered_df.empty:

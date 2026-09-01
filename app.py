@@ -31,6 +31,24 @@ except ImportError:
 st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout="wide")
 
 # =========================================================
+# SECURITY LOCK SCREEN
+# =========================================================
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.markdown("## 🔒 App Locked")
+    st.write("Please enter the team password to access the Weekly Project Report.")
+    entered_pwd = st.text_input("Password", type="password")
+    if st.button("Unlock"):
+        if entered_pwd == st.secrets["APP_PASSWORD"]:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop() # This entirely stops the rest of the app from loading!
+    
+# =========================================================
 # GOOGLE SHEETS BACKEND CONFIGURATION (FIXED)
 # =========================================================
 @st.cache_resource

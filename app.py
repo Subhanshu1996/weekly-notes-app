@@ -37,19 +37,35 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.markdown("## 🔒 App Locked")
-    st.write("Please enter the team password to access the Weekly Project Report.")
-    entered_pwd = st.text_input("Password", type="password")
-    if st.button("Unlock"):
-        if entered_pwd == st.secrets["APP_PASSWORD"]:
+    # Use a styled container for the login screen
+    st.markdown("""
+        <style>
+        .login-box {
+            max-width: 400px; margin: 100px auto; padding: 30px; 
+            background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            text-align: center; border: 1px solid #dfe5ec;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div class="login-box">', unsafe_allow_html=True)
+    st.markdown("<h2 style='color: #16324f; margin-bottom: 5px;'>🔒 App Locked</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b; margin-bottom: 20px;'>Please enter the team password to access the Weekly Project Report.</p>", unsafe_allow_html=True)
+    
+    entered_pwd = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter Password...")
+    
+    if st.button("Unlock App", type="primary", use_container_width=True):
+        if entered_pwd == st.secrets.get("APP_PASSWORD", "MySecretTeamPassword123"):
             st.session_state.authenticated = True
             st.rerun()
         else:
             st.error("Incorrect password.")
-    st.stop() # This entirely stops the rest of the app from loading!
-    
+            
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop() # This halts the script! Nothing below this line runs until unlocked.
+
 # =========================================================
-# GOOGLE SHEETS BACKEND CONFIGURATION (FIXED)
+# GOOGLE SHEETS BACKEND CONFIGURATION
 # =========================================================
 @st.cache_resource
 def get_gspread_client():
@@ -192,7 +208,7 @@ def render_metric_card(label, value):
     return f'<div class="kpi-card"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>'
 
 def format_badge_text(selected_list, all_options):
-    if not selected_list: return "None"
+    if not selected_list: return "All"
     if len(selected_list) == len(all_options): return "All"
     if len(selected_list) <= 2: return ", ".join(map(str, selected_list))
     return f"{len(selected_list)} selected"
@@ -210,7 +226,19 @@ def safe_pdf_text(value):
 
 def create_pdf_report(dataframe, header_title):
     if not FPDF_AVAILABLE: return None
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    
+    # Custom PDF class handles page footers naturally, eliminating the blank page issue
+    class ReportPDF(FPDF):
+        def footer(self):
+            self.set_y(-12)
+            self.set_draw_color(221, 228, 236)
+            self.line(15, 286, 195, 286)
+            self.set_text_color(120, 130, 145)
+            self.set_font("Arial", "", 7)
+            self.cell(90, 5, "Weekly Project Report", align="L")
+            self.cell(90, 5, f"Page {self.page_no()}", align="R")
+
+    pdf = ReportPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=17)
     pdf.add_page()
     pdf.set_fill_color(22, 50, 79)
@@ -235,7 +263,10 @@ def create_pdf_report(dataframe, header_title):
     total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
     delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
     avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
-    avg_util = int(dataframe["Utilization %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
+    
+    # Portfolio Utilization calculation (sum per resource, then mean across all resources)
+    avg_util = int(dataframe.groupby("Resource")["Utilization %"].apply(lambda x: sum(get_pct_decimal(v) * 100 for v in x)).mean()) if not dataframe.empty and "Resource" in dataframe.columns else 0
+    
     risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
 
     kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
@@ -296,11 +327,6 @@ def create_pdf_report(dataframe, header_title):
             pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9)
             blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
             pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
-
-    page_count = pdf.page_no()
-    for page in range(1, page_count + 1):
-        pdf.page = page; pdf.set_y(-12); pdf.set_draw_color(221, 228, 236); pdf.line(15, 286, 195, 286)
-        pdf.set_text_color(120, 130, 145); pdf.set_font("Arial", "", 7); pdf.cell(90, 5, "Weekly Project Report", align="L"); pdf.cell(90, 5, f"Page {page} of {page_count}", align="R")
 
     try: output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
     except Exception: return bytes(pdf.output())
@@ -422,20 +448,20 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
         if filter_team != "All": filtered_df = filtered_df[filtered_df["Team"] == filter_team]
     with f_col3:
         year_options = list(filtered_df["Year"].unique())
-        filter_year = st.multiselect("Year", options=year_options, default=year_options, key="filter_year")
-        filtered_df = filtered_df[filtered_df["Year"].isin(filter_year)] if filter_year else pd.DataFrame(columns=df.columns)
+        filter_year = st.multiselect("Year", options=year_options, key="filter_year")
+        if filter_year: filtered_df = filtered_df[filtered_df["Year"].isin(filter_year)]
     with f_col4:
         month_options = list(filtered_df["Month"].unique())
-        filter_month = st.multiselect("Month", options=month_options, default=month_options, key="filter_month")
-        filtered_df = filtered_df[filtered_df["Month"].isin(filter_month)] if filter_month else pd.DataFrame(columns=df.columns)
+        filter_month = st.multiselect("Month", options=month_options, key="filter_month")
+        if filter_month: filtered_df = filtered_df[filtered_df["Month"].isin(filter_month)]
     with f_col5:
         week_options = list(filtered_df["Week"].unique())
-        filter_week = st.multiselect("Week", options=week_options, default=week_options, key="filter_week")
-        filtered_df = filtered_df[filtered_df["Week"].isin(filter_week)] if filter_week else pd.DataFrame(columns=df.columns)
+        filter_week = st.multiselect("Week", options=week_options, key="filter_week")
+        if filter_week: filtered_df = filtered_df[filtered_df["Week"].isin(filter_week)]
     with f_col6:
         res_options = list(filtered_df["Resource"].unique())
-        selected_resources = st.multiselect("Resource(s)", options=res_options, default=res_options, key="filter_resources")
-        filtered_df = filtered_df[filtered_df["Resource"].isin(selected_resources)] if selected_resources else pd.DataFrame(columns=df.columns)
+        selected_resources = st.multiselect("Resource(s)", options=res_options, key="filter_resources")
+        if selected_resources: filtered_df = filtered_df[filtered_df["Resource"].isin(selected_resources)]
 
     reporting_month = format_badge_text(filter_month, month_options)
     reporting_week = format_badge_text(filter_week, week_options)
@@ -618,7 +644,10 @@ elif nav_selection == "📋 Weekly Summary":
         total_resources = filtered_df["Resource"].nunique()
         delivered_count = len(filtered_df[filtered_df["This Week Delivered"].fillna("").str.strip() != ""])
         avg_comp = int((filtered_df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100)).mean()) if not filtered_df.empty else 0
-        avg_util = int((filtered_df["Utilization %"].apply(lambda x: get_pct_decimal(x) * 100)).mean()) if not filtered_df.empty else 0
+        
+        # Portfolio Utilization calculation (sum per resource, then mean across all resources)
+        avg_util = int(filtered_df.groupby("Resource")["Utilization %"].apply(lambda x: sum(get_pct_decimal(v) * 100 for v in x)).mean()) if not filtered_df.empty else 0
+        
         risk_items = filtered_df[(filtered_df["Status"].isin(["At Risk", "Blocked"])) | (filtered_df["Blocker"].fillna("").str.strip() != "")]
         risk_count = len(risk_items)
 
@@ -663,7 +692,7 @@ elif nav_selection == "📋 Weekly Summary":
         else:
             for _, row in risk_items.iterrows():
                 blocker_text = row['Blocker'] if row['Blocker'] else f"Status marked as: {row['Status']}"
-                st.markdown(f'<div class="risk-box"><div class="risk-title">⚠️ {row["Project / Dashboard"]}</div><div class="risk-desc">{blocker_text}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="risk-box"><div class="risk-title">🚨 {row["Project / Dashboard"]}</div><div class="risk-desc">{blocker_text}</div></div>', unsafe_allow_html=True)
 
 # =========================================================
 # VIEW 3: EXECUTIVE REPORT

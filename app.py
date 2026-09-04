@@ -31,38 +31,59 @@ except ImportError:
 st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout="wide")
 
 # =========================================================
-# SECURITY LOCK SCREEN
+# SECURITY & ROLE-BASED LOGIN SCREEN
 # =========================================================
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+    st.session_state.current_email = ""
+    st.session_state.current_role = ""
+    st.session_state.current_scope = "" 
+    st.session_state.current_acc_scope = ""
 
 if not st.session_state.authenticated:
-    # Use a styled container for the login screen
-    st.markdown("""
-        <style>
-        .login-box {
-            max-width: 400px; margin: 100px auto; padding: 30px; 
-            background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            text-align: center; border: 1px solid #dfe5ec;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    st.markdown('<div style="max-width: 450px; margin: 80px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
+    st.markdown("<h2 style='color: #16324f; text-align:center; margin-bottom: 5px;'>🔒 App Locked</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in to access the Weekly Project Report.</p>", unsafe_allow_html=True)
     
-    st.markdown('<div class="login-box">', unsafe_allow_html=True)
-    st.markdown("<h2 style='color: #16324f; margin-bottom: 5px;'>🔒 App Locked</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b; margin-bottom: 20px;'>Please enter the team password to access the Weekly Project Report.</p>", unsafe_allow_html=True)
+    role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"])
+    user_email = st.text_input("Your Company Email", placeholder="name@company.com")
     
-    entered_pwd = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter Password...")
+    user_scope = ""
+    user_account_scope = ""
+    
+    if role == "Team Lead":
+        user_account_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp")
+        user_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)")
+    elif role == "Account Manager":
+        user_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)")
+        
+    entered_pwd = st.text_input("Password", type="password", placeholder="Enter Role Password...")
     
     if st.button("Unlock App", type="primary", use_container_width=True):
-        if entered_pwd == st.secrets.get("APP_PASSWORD", "MySecretTeamPassword123"):
-            st.session_state.authenticated = True
-            st.rerun()
+        if not user_email.strip():
+            st.error("Please enter your company email.")
+        elif role == "Team Lead" and (not user_scope.strip() or not user_account_scope.strip()):
+            st.error("Please enter both your Account and Team.")
+        elif role == "Account Manager" and not user_scope.strip():
+            st.error("Please enter your Account(s).")
         else:
-            st.error("Incorrect password.")
+            valid_pass = False
+            if role == "Team Member" and entered_pwd == st.secrets.get("APP_PASSWORD", "TeamPassword123"): valid_pass = True
+            elif role == "Team Lead" and entered_pwd == st.secrets.get("LEAD_PASSWORD", "LeadPassword123"): valid_pass = True
+            elif role == "Account Manager" and entered_pwd == st.secrets.get("ACCOUNT_PASSWORD", "AccountPassword123"): valid_pass = True
+            elif role == "Admin" and entered_pwd == st.secrets.get("ADMIN_PASSWORD", "AdminPassword123"): valid_pass = True
             
+            if valid_pass:
+                st.session_state.authenticated = True
+                st.session_state.current_email = user_email.strip().lower()
+                st.session_state.current_role = role
+                st.session_state.current_scope = user_scope.strip()
+                st.session_state.current_acc_scope = user_account_scope.strip()
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
     st.markdown('</div>', unsafe_allow_html=True)
-    st.stop() # This halts the script! Nothing below this line runs until unlocked.
+    st.stop()
 
 # =========================================================
 # GOOGLE SHEETS BACKEND CONFIGURATION
@@ -227,7 +248,6 @@ def safe_pdf_text(value):
 def create_pdf_report(dataframe, header_title):
     if not FPDF_AVAILABLE: return None
     
-    # Custom PDF class handles page footers naturally, eliminating the blank page issue
     class ReportPDF(FPDF):
         def footer(self):
             self.set_y(-12)
@@ -263,10 +283,7 @@ def create_pdf_report(dataframe, header_title):
     total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
     delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
     avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
-    
-    # Portfolio Utilization calculation (sum per resource, then mean across all resources)
     avg_util = int(dataframe.groupby("Resource")["Utilization %"].apply(lambda x: sum(get_pct_decimal(v) * 100 for v in x)).mean()) if not dataframe.empty and "Resource" in dataframe.columns else 0
-    
     risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
 
     kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
@@ -391,8 +408,9 @@ filtered_df = pd.DataFrame()
 reporting_week = "All Weeks"
 reporting_month = "All Months"
 
-st.markdown("""
+st.markdown(f"""
 <div class="app-hero">
+    <div style="position: absolute; right: 25px; top: 25px; font-size: 13px; font-weight: bold; background: rgba(255,255,255,0.15); padding: 5px 12px; border-radius: 20px;">👤 {st.session_state.current_email} ({st.session_state.current_role})</div>
     <div class="app-hero-eyebrow">Weekly Project Management</div>
     <div class="app-hero-title">Weekly Project Report</div>
     <div class="app-hero-subtitle">Track progress, priorities, utilization and delivery across your portfolio.</div>
@@ -419,7 +437,6 @@ elif nav_selection == "📈 Executive Report":
 
 if nav_selection != "✍️ Enter Notes" and not df.empty:
     
-    # Enable the 3D CSS for Filters dynamically ONLY on Tabs 2 & 3
     st.markdown("""
     <style>
     div[data-testid="stSelectbox"], div[data-testid="stMultiSelect"] {
@@ -460,13 +477,12 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
         if filter_week: filtered_df = filtered_df[filtered_df["Week"].isin(filter_week)]
     with f_col6:
         res_options = list(filtered_df["Resource"].unique())
-        selected_resources = st.multiselect("Resource(s)", options=res_options, key="filter_resources")
+        selected_resources = st.multiselect("Resource Email(s)", options=res_options, key="filter_resources")
         if selected_resources: filtered_df = filtered_df[filtered_df["Resource"].isin(selected_resources)]
 
     reporting_month = format_badge_text(filter_month, month_options)
     reporting_week = format_badge_text(filter_week, week_options)
 
-    # Action Buttons Row
     if not filtered_df.empty:
         if nav_selection == "📋 Weekly Summary":
             a1, a2, _ = st.columns([1.5, 1.5, 7])
@@ -557,7 +573,7 @@ if nav_selection == "✍️ Enter Notes":
             with t_col1: year = st.selectbox("Year", options=[datetime.now().year, datetime.now().year+1, datetime.now().year+2])
             with t_col2: month = st.selectbox("Month", options=["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
             with t_col3: week = st.selectbox("Week", options=["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"])
-            with t_col4: resource = st.text_input("Resource Name")
+            with t_col4: resource = st.text_input("Resource Email", value=st.session_state.current_email)
 
         st.markdown('<div class="section-header">03 — Weekly Accomplishments</div>', unsafe_allow_html=True)
         projects_to_save = []
@@ -614,7 +630,7 @@ if nav_selection == "✍️ Enter Notes":
         with sub_col2:
             st.markdown('<div class="marker-nav1-active"></div>', unsafe_allow_html=True)
             if st.button("💾 Save to Google Sheets", type="primary", use_container_width=True):
-                if not resource: st.error("Please enter your Resource Name in Step 2 before saving.")
+                if not resource: st.error("Please enter your Resource Email in Step 2 before saving.")
                 else:
                     missing_names = [i + 1 for i, p in enumerate(projects_to_save) if not p["Project / Dashboard"]]
                     if missing_names: st.error(f"Please enter a Project Name for Project(s): {', '.join(map(str, missing_names))}")
@@ -645,7 +661,6 @@ elif nav_selection == "📋 Weekly Summary":
         delivered_count = len(filtered_df[filtered_df["This Week Delivered"].fillna("").str.strip() != ""])
         avg_comp = int((filtered_df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100)).mean()) if not filtered_df.empty else 0
         
-        # Portfolio Utilization calculation (sum per resource, then mean across all resources)
         avg_util = int(filtered_df.groupby("Resource")["Utilization %"].apply(lambda x: sum(get_pct_decimal(v) * 100 for v in x)).mean()) if not filtered_df.empty else 0
         
         risk_items = filtered_df[(filtered_df["Status"].isin(["At Risk", "Blocked"])) | (filtered_df["Blocker"].fillna("").str.strip() != "")]
@@ -671,7 +686,7 @@ elif nav_selection == "📋 Weekly Summary":
         st.markdown('<div class="section-header">Project / Dashboard Status</div>', unsafe_allow_html=True)
         html_lines = [
             '<table class="custom-table">',
-            '<thead><tr><th>Resource</th><th>Business Owner</th><th>Project / Dashboard</th><th>Expected Delivery</th><th>Completion</th><th>Utilization</th><th>Status</th></tr></thead>',
+            '<thead><tr><th>Resource Email</th><th>Business Owner</th><th>Project / Dashboard</th><th>Expected Delivery</th><th>Completion</th><th>Utilization</th><th>Status</th></tr></thead>',
             '<tbody>'
         ]
         for _, row in filtered_df.iterrows():
@@ -692,10 +707,10 @@ elif nav_selection == "📋 Weekly Summary":
         else:
             for _, row in risk_items.iterrows():
                 blocker_text = row['Blocker'] if row['Blocker'] else f"Status marked as: {row['Status']}"
-                st.markdown(f'<div class="risk-box"><div class="risk-title">🚨 {row["Project / Dashboard"]}</div><div class="risk-desc">{blocker_text}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="risk-box"><div class="risk-title">⚠️ {row["Project / Dashboard"]}</div><div class="risk-desc">{blocker_text}</div></div>', unsafe_allow_html=True)
 
 # =========================================================
-# VIEW 3: EXECUTIVE REPORT
+# VIEW 3: EXECUTIVE REPORT (WITH SMART EDIT BUTTONS)
 # =========================================================
 elif nav_selection == "📈 Executive Report":
     if df.empty or filtered_df.empty:
@@ -765,8 +780,32 @@ elif nav_selection == "📈 Executive Report":
                                         st.markdown(f"<div class='card-title'> {row['Project / Dashboard']}</div>", unsafe_allow_html=True)
                                         st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {row['Business Owner']} &nbsp;|&nbsp; <b>Type:</b> {row['Work Type']}</span>", unsafe_allow_html=True)
                                     with h_col2:
-                                        if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
-                                            st.session_state.edit_id = rec_id; st.rerun()
+                                        # --- SMART SECURITY LOGIC FOR EDIT BUTTON (WITH STRICT ACCOUNT MATCHING) ---
+                                        can_edit = False
+                                        curr_role = st.session_state.get("current_role", "")
+                                        curr_email = st.session_state.get("current_email", "").strip().lower()
+                                        curr_scope = [s.strip().lower() for s in st.session_state.get("current_scope", "").split(",") if s.strip()]
+                                        curr_acc_scope = [s.strip().lower() for s in st.session_state.get("current_acc_scope", "").split(",") if s.strip()]
+                                        
+                                        row_team = str(row.get("Team", "")).strip().lower()
+                                        row_acc = str(row.get("Account", "")).strip().lower()
+                                        row_email = str(row.get("Resource", "")).strip().lower()
+                                        
+                                        if curr_role == "Admin":
+                                            can_edit = True
+                                        elif curr_role == "Account Manager" and row_acc in curr_scope:
+                                            can_edit = True
+                                        elif curr_role == "Team Lead" and row_team in curr_scope and row_acc in curr_acc_scope:
+                                            can_edit = True
+                                        elif row_email == curr_email:
+                                            can_edit = True
+                                            
+                                        if can_edit:
+                                            if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
+                                                st.session_state.edit_id = rec_id; st.rerun()
+                                        else:
+                                            st.markdown("<div style='color:#94a3b8; font-size:12px; text-align:center; padding-top:10px;'>🔒 View Only</div>", unsafe_allow_html=True)
+
                                     c1, c2, c3 = st.columns([2, 2, 1])
                                     with c1:
                                         st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>THIS WEEK DELIVERED</div>", unsafe_allow_html=True)

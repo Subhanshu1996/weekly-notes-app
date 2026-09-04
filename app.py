@@ -39,7 +39,16 @@ st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout=
 IST = ZoneInfo("Asia/Kolkata")
 
 # =========================================================
-# SECURITY & ROLE-BASED LOGIN SCREEN
+# GOOGLE SHEETS BACKEND HELPERS
+# =========================================================
+@st.cache_resource
+def get_gspread_client():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    return gspread.authorize(creds)
+
+# =========================================================
+# SECURITY & ROLE-BASED LOGIN / REGISTRATION SCREEN
 # =========================================================
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -48,69 +57,132 @@ if "authenticated" not in st.session_state:
     st.session_state.current_role = ""
     st.session_state.current_scope = "" 
     st.session_state.current_acc_scope = ""
-if "current_name" not in st.session_state:
-    st.session_state.current_name = ""
 
 if not st.session_state.authenticated:
-    st.markdown('<div style="max-width: 450px; margin: 80px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
-    st.markdown("<h2 style='color: #16324f; text-align:center; margin-bottom: 5px;'>🔒 App Locked</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in to access the Weekly Project Report.</p>", unsafe_allow_html=True)
+    st.markdown('<div style="max-width: 480px; margin: 60px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
+    st.markdown("<h2 style='color: #16324f; text-align:center; margin-bottom: 5px;'>🔒 Project Portal</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in or create an account to continue.</p>", unsafe_allow_html=True)
     
-    role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"])
-    user_name = st.text_input("Your Name", placeholder="e.g. John Smith")
-    user_email = st.text_input("Your Company Email", placeholder="name@company.com")
+    tab1, tab2 = st.tabs(["🔐 Log In", "📝 Create Account"])
     
-    user_scope = ""
-    user_account_scope = ""
-    
-    if role == "Team Lead":
-        user_account_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp")
-        user_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)")
-    elif role == "Account Manager":
-        user_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)")
+    # --- TAB 1: LOG IN ---
+    with tab1:
+        log_email = st.text_input("Company Email", key="log_email", placeholder="name@company.com").strip().lower()
+        log_pwd = st.text_input("Password", type="password", key="log_pwd", placeholder="Your personal password")
         
-    entered_pwd = st.text_input("Password", type="password", placeholder="Enter Role Password...")
-    
-    if st.button("Unlock App", type="primary", use_container_width=True):
-        if not user_name.strip():
-            st.error("Please enter your name.")
-        elif not user_email.strip() or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", user_email.strip()):
-            st.error("Please enter a valid company email address.")
-        elif role == "Team Lead" and (not user_scope.strip() or not user_account_scope.strip()):
-            st.error("Please enter both your Account and Team.")
-        elif role == "Account Manager" and not user_scope.strip():
-            st.error("Please enter your Account(s).")
-        else:
-            valid_pass = False
-            password_keys = {"Team Member": "APP_PASSWORD", "Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
-            password_key = password_keys[role]
-            configured_password = st.secrets.get(password_key, os.getenv(password_key, ""))
-            if not configured_password:
-                st.error(f"Login is not configured for {role}. Please configure {password_key} in Streamlit secrets.")
-            elif entered_pwd == configured_password:
-                valid_pass = True
-            
-            if valid_pass:
-                st.session_state.authenticated = True
-                st.session_state.current_email = user_email.strip().lower()
-                st.session_state.current_name = user_name.strip()
-                st.session_state.current_role = role
-                st.session_state.current_scope = user_scope.strip()
-                st.session_state.current_acc_scope = user_account_scope.strip()
-                st.rerun()
+        if st.button("Log In", type="primary", use_container_width=True):
+            if not log_email or not log_pwd:
+                st.error("Please enter your email and password.")
             else:
-                st.error("Incorrect password.")
+                with st.spinner("Authenticating..."):
+                    client = get_gspread_client()
+                    spreadsheet = client.open("Weekly Notes Database")
+                    try:
+                        u_sheet = spreadsheet.worksheet("Users")
+                        records = u_sheet.get_all_records()
+                    except Exception:
+                        records = []
+                    
+                    user = next((r for r in records if str(r.get("Email", "")).strip().lower() == log_email), None)
+                    hashed_attempt = hashlib.sha256(log_pwd.encode()).hexdigest()
+                    
+                    if user and user.get("Password_Hash") == hashed_attempt:
+                        st.session_state.authenticated = True
+                        st.session_state.current_email = str(user.get("Email", ""))
+                        st.session_state.current_name = str(user.get("Name", ""))
+                        st.session_state.current_role = str(user.get("Role", ""))
+                        st.session_state.current_scope = str(user.get("Scope", ""))
+                        st.session_state.current_acc_scope = str(user.get("Account_Scope", ""))
+                        st.rerun()
+                    else:
+                        st.error("Invalid email or password.")
+                        
+    # --- TAB 2: CREATE ACCOUNT ---
+    with tab2:
+        reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
+        reg_email = st.text_input("Company Email", key="reg_email", placeholder="name@company.com").strip().lower()
+        reg_role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"], key="reg_role")
+        
+        reg_acc_scope = ""
+        reg_scope = ""
+        if reg_role == "Team Lead":
+            reg_acc_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp", key="reg_acc_scope").strip()
+            reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)", key="reg_scope").strip()
+        elif reg_role == "Account Manager":
+            reg_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)", key="reg_scope2").strip()
+            
+        c1, c2 = st.columns(2)
+        with c1: reg_pwd = st.text_input("Create Password", type="password", key="reg_pwd")
+        with c2: reg_pwd2 = st.text_input("Confirm Password", type="password", key="reg_pwd2")
+        
+        st.divider()
+        
+        # --- DYNAMIC INVITE CODE LOGIC ---
+        reg_invite = ""
+        if reg_role != "Team Member":
+            reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
+        else:
+            st.caption("✨ Team Members can register directly without an invite code.")
+        
+        if st.button("Create Account", type="primary", use_container_width=True):
+            if not reg_name:
+                st.error("Please enter your name.")
+            elif not reg_email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", reg_email):
+                st.error("Please enter a valid company email address.")
+            elif reg_role == "Team Lead" and (not reg_acc_scope or not reg_scope):
+                st.error("Please enter both your Account and Team scope.")
+            elif reg_role == "Account Manager" and not reg_scope:
+                st.error("Please enter your Account(s) scope.")
+            elif len(reg_pwd) < 6:
+                st.error("Password must be at least 6 characters.")
+            elif reg_pwd != reg_pwd2:
+                st.error("Passwords do not match.")
+            else:
+                invite_valid = False
+                
+                # Verify invite code ONLY if not a Team Member
+                if reg_role == "Team Member":
+                    invite_valid = True
+                else:
+                    password_keys = {"Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
+                    req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
+                    
+                    if not req_invite:
+                        st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
+                    elif reg_invite != req_invite:
+                        st.error(f"Invalid Invite Code for the {reg_role} role.")
+                    else:
+                        invite_valid = True
+                
+                if invite_valid:
+                    with st.spinner("Setting up your account..."):
+                        client = get_gspread_client()
+                        spreadsheet = client.open("Weekly Notes Database")
+                        
+                        try:
+                            u_sheet = spreadsheet.worksheet("Users")
+                        except Exception:
+                            u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
+                            u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
+                        
+                        records = u_sheet.get_all_records()
+                        if any(str(r.get("Email","")).strip().lower() == reg_email for r in records):
+                            st.error("An account with this email already exists. Please log in.")
+                        else:
+                            hashed_pw = hashlib.sha256(reg_pwd.encode()).hexdigest()
+                            u_sheet.append_row([reg_email, reg_name, reg_role, reg_scope, reg_acc_scope, hashed_pw])
+                            
+                            st.session_state.authenticated = True
+                            st.session_state.current_email = reg_email
+                            st.session_state.current_name = reg_name
+                            st.session_state.current_role = reg_role
+                            st.session_state.current_scope = reg_scope
+                            st.session_state.current_acc_scope = reg_acc_scope
+                            st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# =========================================================
-# GOOGLE SHEETS BACKEND CONFIGURATION
-# =========================================================
-@st.cache_resource
-def get_gspread_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-    return gspread.authorize(creds)
 
 def load_data_from_gsheets():
     try:
@@ -125,7 +197,6 @@ def save_new_notes_to_gsheets(new_entries):
     client = get_gspread_client()
     sheet = client.open("Weekly Notes Database").sheet1
     headers = sheet.row_values(1)
-    # Additive schema support for the authenticated user's display name.
     if "Resource Name" not in headers:
         headers.append("Resource Name")
         sheet.update_cell(1, len(headers), "Resource Name")
@@ -220,20 +291,20 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .action-attention { background:#fffbeb; border:1px solid #fde68a; border-left:5px solid #d97706; padding:12px 14px; border-radius:10px; margin:8px 0; }
 hr { margin: 12px 0 !important; border-color:#e6ebf1 !important; }
 
-    /* V2 enterprise refinements — additive UI only */
-    .filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
-    .filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
-    .filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
-    .filter-chip { display:inline-block; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; }
-    .health-strip { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:12px 15px; margin:8px 0 15px; }
-    .health-title { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:#64748b; font-weight:800; }
-    .health-score { font-size:25px; font-weight:800; color:#16324f; }
-    .health-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
-    .mini-insight { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; font-size:13px; color:#334155; }
-    .login-meta { text-align:center; color:#94a3b8; font-size:11px; margin-top:8px; }
-    .section-note { color:#64748b; font-size:12px; margin-top:-5px; margin-bottom:8px; }
-    .compact-row { border-bottom:1px solid #edf1f5; padding:9px 4px; }
-    .app-user { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); }
+/* V2 enterprise refinements — additive UI only */
+.filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
+.filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
+.filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
+.filter-chip { display:inline-block; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; }
+.health-strip { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:12px 15px; margin:8px 0 15px; }
+.health-title { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:#64748b; font-weight:800; }
+.health-score { font-size:25px; font-weight:800; color:#16324f; }
+.health-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+.mini-insight { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; font-size:13px; color:#334155; }
+.login-meta { text-align:center; color:#94a3b8; font-size:11px; margin-top:8px; }
+.section-note { color:#64748b; font-size:12px; margin-top:-5px; margin-bottom:8px; }
+.compact-row { border-bottom:1px solid #edf1f5; padding:9px 4px; }
+.app-user { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -580,9 +651,6 @@ def compare_current_to_prior(current_df, prior_df):
         })
     return pd.DataFrame(records)
 
-def html_escape(value):
-    return html.escape("" if value is None else str(value))
-
 def build_action_items(dataframe):
     items = []
     if dataframe.empty:
@@ -615,7 +683,6 @@ def refresh_cloud_data(show_message=True):
         if show_message:
             st.success(f"Data refreshed successfully — {len(latest)} record(s) loaded.")
     else:
-        # Keep existing data if the refresh failed/returned empty.
         st.warning("Refresh returned no records. Existing session data was retained.")
     st.session_state.accounts_db = {}
     if st.session_state.notes_db:
@@ -623,12 +690,6 @@ def refresh_cloud_data(show_message=True):
         if "Account" in live_df.columns and "Team" in live_df.columns:
             for acc in live_df["Account"].dropna().unique():
                 st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].dropna().unique().tolist()
-
-def safe_pdf_text(value):
-    text = "" if value is None else str(value)
-    replacements = {"–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", "•":"-", "✓":"OK", "⚠":"!", "×":"x"}
-    for old, new in replacements.items(): text = text.replace(old, new)
-    return text.encode("latin-1", "replace").decode("latin-1")
 
 def create_pdf_report(dataframe, header_title):
     if not FPDF_AVAILABLE: return None
@@ -730,7 +791,6 @@ def create_pdf_report(dataframe, header_title):
             blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
             pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
 
-    # Management appendix: delivery outlook, health and actions.
     pdf.add_page()
     section("Management Actions & Health")
     pdf.set_text_color(52,64,84); pdf.set_font("Arial", "", 9)
@@ -748,14 +808,12 @@ def create_pdf_report(dataframe, header_title):
     except Exception: return bytes(pdf.output())
 
 def create_excel_report(dataframe, report_title):
-    """Create the original Weekly Notes sheet plus additive management sheets."""
     buffer = io.BytesIO()
     wb = Workbook() if OPENPYXL_AVAILABLE else None
     if wb is None:
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: dataframe.to_excel(writer, index=False, sheet_name="Weekly Notes")
         return buffer.getvalue()
 
-    # Original sheet preserved.
     ws = wb.active; ws.title = "Weekly Notes"
     cols = ["Resource", "Business Owner", "Project / Dashboard", "Start date", "Initial Delivery date", "Updated Expected Delivery date", "Work Type", "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", "Status", "Blocker"]
     date_str = report_title.split(": ")[-1] if ": " in report_title else report_title
@@ -777,7 +835,6 @@ def create_excel_report(dataframe, report_title):
     for col_letter, width in widths.items(): ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A3"; ws.auto_filter.ref = f"A2:M{max(2,len(dataframe)+2)}"
 
-    # Executive Summary
     ex = wb.create_sheet("Executive Summary")
     score, counts = portfolio_health(dataframe)
     avg_completion = int(round(sum(pct_value(x) for x in dataframe["Completion %"])/max(1,len(dataframe)))) if not dataframe.empty else 0
@@ -787,12 +844,10 @@ def create_excel_report(dataframe, report_title):
     for cell in ex["A"]: cell.font=Font(bold=True)
     ex.column_dimensions["A"].width=25; ex.column_dimensions["B"].width=35; ex.freeze_panes="A2"
 
-    # Risks & Actions
     ra = wb.create_sheet("Risks & Actions")
     action_items=build_action_items(dataframe); ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
     for item in action_items: ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
 
-    # Week-over-week
     wow = wb.create_sheet("Week-over-Week")
     yrs=list(dataframe["Year"].unique()) if not dataframe.empty else []; mos=list(dataframe["Month"].unique()) if not dataframe.empty else []; wks=list(dataframe["Week"].unique()) if not dataframe.empty else []
     mv=compare_current_to_prior(dataframe,get_latest_prior_week(dataframe,yrs[0],mos[0],wks[0])) if len(yrs)==len(mos)==len(wks)==1 else pd.DataFrame()
@@ -800,14 +855,12 @@ def create_excel_report(dataframe, report_title):
     else:
         wow.append(list(mv.columns)); [wow.append(list(r)) for r in mv.itertuples(index=False,name=None)]
 
-    # Data Quality
     dq=wb.create_sheet("Data Quality")
     dq.append(["Project / Dashboard","Resource","Status","Issues"])
     for _,r in dataframe.iterrows():
         flags=data_quality_flags(r)
         if flags: dq.append([r.get("Project / Dashboard",""),r.get("Resource",""),r.get("Status",""),"; ".join(flags)])
 
-    # Common styling for management sheets.
     for sh in [ex,ra,wow,dq]:
         for cell in sh[1]: cell.font=Font(bold=True); cell.fill=PatternFill("solid",fgColor="DDEBF7"); cell.alignment=Alignment(wrap_text=True)
         for col in range(1, sh.max_column+1): sh.column_dimensions[get_column_letter(col)].width=min(45,max(14,sh.column_dimensions[get_column_letter(col)].width or 14))
@@ -821,7 +874,6 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None):
     if not host or not sender: return False, "Email sending is not configured (SMTP secrets missing)."
     msg = EmailMessage(); msg["Subject"] = report_title; msg["From"] = sender; msg["To"] = ", ".join(recipients)
     if cc_recipients: msg["Cc"] = ", ".join(cc_recipients)
-    # Rich plain-text executive summary keeps email useful even before opening the PDF.
     msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
     msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
     try:
@@ -849,7 +901,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Lightweight utility bar — additive only.
 util_c1, util_c2, util_c3, util_c4 = st.columns([1.2, 1.4, 5.2, 1.8])
 with util_c1:
     if st.button("🔄 Refresh Data", key="refresh_data_top", use_container_width=True):
@@ -907,7 +958,6 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     </style>
     """, unsafe_allow_html=True)
 
-    # Compact filter drawer: all existing filters remain available, but the main page stays clean.
     active_filter_count = 0
     if st.session_state.get("filter_resources"): active_filter_count += 1
     if st.session_state.get("filter_year"): active_filter_count += 1
@@ -915,6 +965,7 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     if st.session_state.get("filter_week"): active_filter_count += 1
     if st.session_state.get("quick_filter_select", "All") != "All": active_filter_count += 1
     filter_title = f"🔎 Filters & Search {'· ' + str(active_filter_count) + ' active' if active_filter_count else '· All records'}"
+    
     with st.expander(filter_title, expanded=False):
         st.caption("Use the compact two-row filter bar. Selected multi-filters can be removed directly from their fields.")
         pv1,pv2,pv3,pv4,pv5 = st.columns(5)
@@ -935,6 +986,7 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
         with pv5:
             if st.button("Executive View", key="preset_exec_view", use_container_width=True):
                 st.session_state.filter_resources=[]; st.session_state.filter_year=[]; st.session_state.filter_month=[]; st.session_state.filter_week=[]; st.session_state.quick_filter_select="All"; st.session_state.project_search_input=""; st.rerun()
+        
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
             filter_acc = st.selectbox("Account", options=["All"] + list(df["Account"].dropna().unique()), key="filter_account")
@@ -1085,7 +1137,6 @@ if nav_selection == "✍️ Enter Notes":
             with t_col4: resource = st.text_input("Resource Email", value=st.session_state.current_email)
         st.caption(f"Reporting user: {html_escape(st.session_state.get('current_name',''))} · {html_escape(st.session_state.get('current_email',''))}")
 
-        # Copy Previous Week — additive shortcut. It never saves automatically.
         copy_col1, copy_col2, copy_col3 = st.columns([2.2, 2.2, 5.6])
         with copy_col1:
             if st.button("📋 Load Previous Week", key="load_previous_week", use_container_width=True):
@@ -1192,7 +1243,6 @@ if nav_selection == "✍️ Enter Notes":
                                 full_entry.update(proj_data)
                                 final_entries.append(full_entry)
                             
-                            # Duplicate protection is additive: user can explicitly choose Save Anyway.
                             existing_df = pd.DataFrame(st.session_state.notes_db) if st.session_state.notes_db else pd.DataFrame()
                             duplicate_keys = set(existing_df.apply(row_submission_key, axis=1)) if not existing_df.empty else set()
                             duplicate_entries = [e for e in final_entries if row_submission_key(e) in duplicate_keys]
@@ -1260,7 +1310,6 @@ elif nav_selection == "📋 Weekly Summary":
         with s4: st.markdown(render_metric_card("COMPLETION", f"{avg_comp}%"), unsafe_allow_html=True)
         with s5: st.markdown(render_metric_card("UTILIZATION", f"{avg_util}%"), unsafe_allow_html=True)
 
-        # Management intelligence — additive summaries built from the same filtered records.
         hscore, hcounts = portfolio_health(filtered_df)
         hcolor = "#16a34a" if hscore >= 80 else ("#d97706" if hscore >= 60 else "#dc2626")
         overdue = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Overdue")

@@ -10,6 +10,7 @@ import re
 import smtplib
 from email.message import EmailMessage
 import hashlib
+import random
 from collections import Counter
 import gspread
 from google.oauth2.service_account import Credentials
@@ -47,6 +48,57 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     return gspread.authorize(creds)
 
+def update_user_password_in_gsheets(email, new_hashed_pwd):
+    """Updates a user's password hash in the Users tab."""
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open("Weekly Notes Database")
+        u_sheet = spreadsheet.worksheet("Users")
+        records = u_sheet.get_all_records()
+        headers = u_sheet.row_values(1)
+        
+        if "Password_Hash" not in headers:
+            return False
+            
+        col_idx = headers.index("Password_Hash") + 1
+        
+        for idx, row in enumerate(records):
+            if str(row.get("Email", "")).strip().lower() == email.strip().lower():
+                row_idx = idx + 2 # +1 for 0-index offset, +1 for header row
+                u_sheet.update_cell(row_idx, col_idx, new_hashed_pwd)
+                return True
+        return False
+    except Exception as e:
+        return False
+
+def send_otp_email(recipient_email, otp):
+    """Sends a 6-digit OTP for password reset."""
+    cfg = st.secrets if hasattr(st, "secrets") else {}
+    host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
+    port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
+    username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", ""))
+    password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
+    sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
+    use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+    
+    if not host or not sender: 
+        return False, "Email sending is not configured in secrets."
+    
+    msg = EmailMessage()
+    msg["Subject"] = "Password Reset - Weekly Project Report"
+    msg["From"] = sender
+    msg["To"] = recipient_email
+    msg.set_content(f"Your One-Time Password (OTP) to reset your account is: {otp}\n\nIf you did not request a password reset, please ignore this email.")
+    
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            if use_tls: server.starttls()
+            if username and password: server.login(username, password)
+            server.send_message(msg)
+        return True, "OTP sent successfully."
+    except Exception as exc: 
+        return False, f"Unable to send email: {exc}"
+
 # =========================================================
 # SECURITY & ROLE-BASED LOGIN / REGISTRATION SCREEN
 # =========================================================
@@ -57,13 +109,15 @@ if "authenticated" not in st.session_state:
     st.session_state.current_role = ""
     st.session_state.current_scope = "" 
     st.session_state.current_acc_scope = ""
+    st.session_state.reset_otp = None
+    st.session_state.reset_email = None
 
 if not st.session_state.authenticated:
     st.markdown('<div style="max-width: 480px; margin: 60px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
     st.markdown("<h2 style='color: #16324f; text-align:center; margin-bottom: 5px;'>🔒 Project Portal</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in or create an account to continue.</p>", unsafe_allow_html=True)
     
-    tab1, tab2 = st.tabs(["🔐 Log In", "📝 Create Account"])
+    tab1, tab2, tab3 = st.tabs(["🔐 Log In", "📝 Create Account", "🔑 Forgot Password"])
     
     # --- TAB 1: LOG IN ---
     with tab1:
@@ -117,7 +171,6 @@ if not st.session_state.authenticated:
         
         st.divider()
         
-        # --- DYNAMIC INVITE CODE LOGIC ---
         reg_invite = ""
         if reg_role != "Team Member":
             reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
@@ -140,7 +193,6 @@ if not st.session_state.authenticated:
             else:
                 invite_valid = False
                 
-                # Verify invite code ONLY if not a Team Member
                 if reg_role == "Team Member":
                     invite_valid = True
                 else:
@@ -179,6 +231,70 @@ if not st.session_state.authenticated:
                             st.session_state.current_scope = reg_scope
                             st.session_state.current_acc_scope = reg_acc_scope
                             st.rerun()
+
+    # --- TAB 3: FORGOT PASSWORD ---
+    with tab3:
+        if not st.session_state.reset_otp:
+            st.markdown("<p style='font-size:14px; color:#475569;'>Enter your registered email address to receive a secure 6-digit reset code.</p>", unsafe_allow_html=True)
+            reset_email_input = st.text_input("Registered Company Email", key="reset_email_in", placeholder="name@company.com").strip().lower()
+            
+            if st.button("Send OTP", use_container_width=True):
+                if not reset_email_input:
+                    st.error("Please enter your email.")
+                else:
+                    with st.spinner("Verifying account..."):
+                        client = get_gspread_client()
+                        spreadsheet = client.open("Weekly Notes Database")
+                        try:
+                            u_sheet = spreadsheet.worksheet("Users")
+                            records = u_sheet.get_all_records()
+                        except Exception:
+                            records = []
+                        
+                        user = next((r for r in records if str(r.get("Email", "")).strip().lower() == reset_email_input), None)
+                        if not user:
+                            st.error("No account found with this email.")
+                        else:
+                            otp = str(random.randint(100000, 999999))
+                            ok, msg = send_otp_email(reset_email_input, otp)
+                            if ok:
+                                st.session_state.reset_otp = otp
+                                st.session_state.reset_email = reset_email_input
+                                st.success(f"An OTP has been securely sent to {reset_email_input}")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+        else:
+            st.success(f"OTP sent to {st.session_state.reset_email}")
+            entered_otp = st.text_input("Enter 6-digit OTP", key="entered_otp", placeholder="000000")
+            st.divider()
+            new_pwd1 = st.text_input("New Password", type="password", key="new_pwd1", placeholder="At least 6 characters")
+            new_pwd2 = st.text_input("Confirm New Password", type="password", key="new_pwd2")
+            
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                if st.button("Reset Password", type="primary", use_container_width=True):
+                    if entered_otp.strip() != st.session_state.reset_otp:
+                        st.error("Invalid OTP.")
+                    elif len(new_pwd1) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    elif new_pwd1 != new_pwd2:
+                        st.error("Passwords do not match.")
+                    else:
+                        with st.spinner("Updating password securely..."):
+                            hashed_pw = hashlib.sha256(new_pwd1.encode()).hexdigest()
+                            success = update_user_password_in_gsheets(st.session_state.reset_email, hashed_pw)
+                            if success:
+                                st.success("Password updated successfully! Please switch to the Log In tab.")
+                                st.session_state.reset_otp = None
+                                st.session_state.reset_email = None
+                            else:
+                                st.error("Failed to update password. Please try again.")
+            with rc2:
+                if st.button("Cancel Reset", use_container_width=True):
+                    st.session_state.reset_otp = None
+                    st.session_state.reset_email = None
+                    st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
@@ -337,6 +453,17 @@ if st.session_state.notes_db:
 # =========================================================
 # HELPERS
 # =========================================================
+def html_escape(value):
+    """Safely escape strings for HTML rendering."""
+    return html.escape("" if value is None else str(value))
+
+def safe_pdf_text(value):
+    """Safely format strings for FPDF latin-1 encoding."""
+    text = "" if value is None else str(value)
+    replacements = {"–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", "•":"-", "✓":"OK", "⚠":"!", "×":"x"}
+    for old, new in replacements.items(): text = text.replace(old, new)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
 def get_pct_decimal(pct_str):
     try: return float(str(pct_str).replace('%', '').strip()) / 100.0
     except Exception: return 0.0
@@ -368,7 +495,6 @@ def pct_value(value):
 
 def normalize_text(value):
     return str(value or "").strip().lower()
-
 
 def user_can_edit_row(row):
     """Server-side edit authorization; UI permissions are not trusted for writes."""
@@ -485,35 +611,8 @@ def write_audit_event(action, row_id, old_row=None, new_row=None):
     except Exception:
         pass
 
-def is_blank(value):
-    return normalize_text(value) in {"", "none", "na", "n/a", "nan"}
-
-def row_project_key(row):
-    """Stable project identity for week-over-week comparisons."""
-    return "|".join([
-        normalize_text(row.get("Account")),
-        normalize_text(row.get("Team")),
-        normalize_text(row.get("Resource")),
-        normalize_text(row.get("Project / Dashboard")),
-    ])
-
 def date_from_row(row):
     return parse_date(row.get("Updated Expected Delivery date"))
-
-def delivery_state(row, as_of=None):
-    as_of = as_of or datetime.now(IST).date()
-    status = normalize_text(row.get("Status"))
-    if status == "completed":
-        return "Delivered"
-    due = date_from_row(row)
-    if not due:
-        return "No Date"
-    delta = (due - as_of).days
-    if delta < 0:
-        return f"Overdue {abs(delta)}d"
-    if delta <= 7:
-        return f"Due in {delta}d"
-    return "Upcoming"
 
 def data_quality_flags(row):
     flags = []
@@ -1484,7 +1583,6 @@ elif nav_selection == "📈 Executive Report":
                                         st.markdown(f"<div class='card-title'> {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
                                         st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {html_escape(row.get('Business Owner',''))} &nbsp;|&nbsp; <b>Type:</b> {html_escape(row.get('Work Type',''))}</span>", unsafe_allow_html=True)
                                     with h_col2:
-                                        # --- SMART SECURITY LOGIC FOR EDIT BUTTON ---
                                         can_edit = False
                                         curr_role = st.session_state.get("current_role", "")
                                         curr_email = st.session_state.get("current_email", "").strip().lower()
@@ -1528,7 +1626,7 @@ elif nav_selection == "📈 Executive Report":
                                         st.progress(get_pct_decimal(row['Completion %']))
                                         st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{row['Utilization %']}</b></div>", unsafe_allow_html=True)
                                         st.progress(get_pct_decimal(row['Utilization %']))
-                                    # Delivery intelligence and data-quality cues.
+                                    
                                     d_state = delivery_state(row)
                                     d_flags = data_quality_flags(row)
                                     if d_state.startswith("Overdue"):

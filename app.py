@@ -15,6 +15,9 @@ from collections import Counter
 import gspread
 from google.oauth2.service_account import Credentials
 
+# --- Email Logo Fallback URL ---
+EMAIL_LOGO_URL = "https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png"
+
 # Optional PDF dependency
 try:
     from fpdf import FPDF
@@ -121,7 +124,6 @@ if not st.session_state.authenticated:
     
     tab1, tab2, tab3 = st.tabs(["🔐 Log In", "📝 Create Account", "🔑 Forgot Password"])
     
-    # --- TAB 1: LOG IN ---
     with tab1:
         log_email = st.text_input("Company Email", key="log_email", placeholder="name@company.com").strip().lower()
         log_pwd = st.text_input("Password", type="password", key="log_pwd", placeholder="Your personal password")
@@ -153,7 +155,6 @@ if not st.session_state.authenticated:
                     else:
                         st.error("Invalid email or password.")
                         
-    # --- TAB 2: CREATE ACCOUNT (WITH OTP VERIFICATION) ---
     with tab2:
         if not st.session_state.reg_otp:
             reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
@@ -200,13 +201,9 @@ if not st.session_state.authenticated:
                     else:
                         password_keys = {"Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
                         req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
-                        
-                        if not req_invite:
-                            st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
-                        elif reg_invite != req_invite:
-                            st.error(f"Invalid Invite Code for the {reg_role} role.")
-                        else:
-                            invite_valid = True
+                        if not req_invite: st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
+                        elif reg_invite != req_invite: st.error(f"Invalid Invite Code for the {reg_role} role.")
+                        else: invite_valid = True
                     
                     if invite_valid:
                         with st.spinner("Checking details..."):
@@ -246,8 +243,7 @@ if not st.session_state.authenticated:
                         with st.spinner("Creating your account securely..."):
                             client = get_gspread_client()
                             spreadsheet = client.open("Weekly Notes Database")
-                            try:
-                                u_sheet = spreadsheet.worksheet("Users")
+                            try: u_sheet = spreadsheet.worksheet("Users")
                             except Exception:
                                 u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
                                 u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
@@ -268,7 +264,6 @@ if not st.session_state.authenticated:
                             st.session_state.current_role = st.session_state.reg_details['role']
                             st.session_state.current_scope = st.session_state.reg_details['scope']
                             st.session_state.current_acc_scope = st.session_state.reg_details['acc_scope']
-                            
                             st.session_state.reg_otp = None
                             st.session_state.reg_details = None
                             st.rerun()
@@ -278,7 +273,6 @@ if not st.session_state.authenticated:
                     st.session_state.reg_details = None
                     st.rerun()
 
-    # --- TAB 3: FORGOT PASSWORD ---
     with tab3:
         if not st.session_state.reset_otp:
             st.markdown("<p style='font-size:14px; color:#475569;'>Enter your registered email address to receive a secure 6-digit reset code.</p>", unsafe_allow_html=True)
@@ -786,7 +780,15 @@ def generate_html_email_body(df, report_title):
     for _, row in df.iterrows():
         proj = html_escape(row.get("Project / Dashboard", ""))
         owner = html_escape(row.get("Business Owner", ""))
-        res = html_escape(row.get("Resource Name", "")) or html_escape(row.get("Resource", ""))
+        
+        # Name Extraction to prevent email spillover
+        raw_name = str(row.get("Resource Name", "")).strip()
+        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
+            res = html_escape(raw_name)
+        else:
+            email_val = str(row.get("Resource", "")).strip()
+            res = html_escape(email_val.split('@')[0].replace('.', ' ').title())
+            
         status = html_escape(row.get("Status", "On Track"))
         comp = int(pct_value(row.get("Completion %")))
         due = html_escape(row.get("Updated Expected Delivery date", "N/A"))
@@ -794,18 +796,18 @@ def generate_html_email_body(df, report_title):
 
         table_rows += f"""
         <tr>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b;">
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
                 <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
             </td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{res}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; width: 25%;">
-                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}% Completed</div>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{res}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
+                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 6px;">{comp}% Completed</div>
                 <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
-                    <div style="background-color: #ea580c; width: {comp}%; height: 100%;"></div>
+                    <div style="background-color: {status_color}; width: {comp}%; height: 100%;"></div>
                 </div>
             </td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
         </tr>
         """
 
@@ -879,20 +881,20 @@ def generate_html_email_body(df, report_title):
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px; table-layout: fixed;">
                     <thead>
                         <tr style="background-color: #1e293b;">
-                            <th align="left" width="30%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">PROJECT / OWNER</th>
-                            <th align="left" width="20%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">RESOURCE</th>
-                            <th align="left" width="25%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">DELIVERY PROGRESS</th>
-                            <th align="left" width="15%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">TARGET DATE</th>
-                            <th align="left" width="10%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">STATUS</th>
+                            <th align="left" width="28%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">PROJECT / OWNER</th>
+                            <th align="left" width="20%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">RESOURCE</th>
+                            <th align="left" width="25%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">DELIVERY PROGRESS</th>
+                            <th align="left" width="15%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">TARGET DATE</th>
+                            <th align="left" width="12%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">STATUS</th>
                         </tr>
                     </thead>
                     <tbody>
                         {table_rows}
                     </tbody>
                 </table>
-                <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px;">
+                <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px; margin-bottom: 30px;">
                     <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
-                    <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 14px; line-height: 1.6;">
+                    <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.6;">
                         {highlights_html}
                     </ul>
                 </div>
@@ -1012,31 +1014,40 @@ def create_pdf_report(dataframe, header_title):
     pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
 
     section("Project Status")
-    headers = [("Project", 60), ("Resource", 28), ("Status", 28), ("Comp.", 17), ("Util.", 17), ("Expected", 30)]
+    headers = [("Project", 60, "L"), ("Resource", 28, "L"), ("Status", 28, "L"), ("Comp.", 17, "C"), ("Util.", 17, "C"), ("Expected", 30, "L")]
     pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
     pdf.set_x(15)
-    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True)
+    for label, width, al in headers: 
+        pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True, align=al)
     pdf.ln(); pdf.set_font("Arial", "", 8.2)
     for ridx, (_, row) in enumerate(dataframe.iterrows()):
         pdf.set_x(15)
         if ridx % 2 == 1: pdf.set_fill_color(249, 251, 253)
         else: pdf.set_fill_color(255, 255, 255)
         project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]
-        resource = safe_pdf_text(row.get("Resource Name", "")) or safe_pdf_text(row.get("Resource", "N/A"))[:17]
+        
+        # Elegant Name extraction for PDF table
+        raw_name = str(row.get("Resource Name", "")).strip()
+        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
+            resource = safe_pdf_text(raw_name)[:20]
+        else:
+            email_val = str(row.get("Resource", "N/A")).strip()
+            resource = safe_pdf_text(email_val.split('@')[0].replace('.', ' ').title())[:20]
+            
         status = safe_pdf_text(row.get("Status", "N/A"))[:15]; comp = safe_pdf_text(row.get("Completion %", "N/A"))
         util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
         
         pdf.set_text_color(52, 64, 84)
-        pdf.cell(60, 8, project, border=1, fill=True)
-        pdf.cell(28, 8, resource[:20], border=1, fill=True)
+        pdf.cell(60, 8, project, border=1, fill=True, align="L")
+        pdf.cell(28, 8, resource, border=1, fill=True, align="L")
         
         if status in ("At Risk", "Blocked"): pdf.set_text_color(160, 55, 55)
         elif status == "Completed": pdf.set_text_color(22, 128, 91)
-        pdf.cell(28, 8, status, border=1, fill=True); pdf.set_text_color(52, 64, 84)
+        pdf.cell(28, 8, status, border=1, fill=True, align="L"); pdf.set_text_color(52, 64, 84)
         
         pdf.cell(17, 8, comp, border=1, fill=True, align="C")
         pdf.cell(17, 8, util, border=1, fill=True, align="C")
-        pdf.cell(30, 8, expected, border=1, fill=True)
+        pdf.cell(30, 8, expected, border=1, fill=True, align="L")
         pdf.ln()
 
     section("Weekly Highlights")
@@ -1167,7 +1178,6 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, d
         msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
         msg.add_alternative(html_content, subtype='html')
         
-        # Safely embed the local logo so it never breaks in Outlook/Gmail
         if os.path.exists("logo.png"):
             try:
                 with open("logo.png", "rb") as img:

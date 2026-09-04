@@ -15,9 +15,6 @@ from collections import Counter
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- Email Logo Fallback URL ---
-EMAIL_LOGO_URL = "https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png"
-
 # Optional PDF dependency
 try:
     from fpdf import FPDF
@@ -801,7 +798,7 @@ def generate_html_email_body(df, report_title):
                 <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
             </td>
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{res}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; width: 25%;">
                 <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}% Completed</div>
                 <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
                     <div style="background-color: #ea580c; width: {comp}%; height: 100%;"></div>
@@ -826,6 +823,8 @@ def generate_html_email_body(df, report_title):
                 highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row.get('Project / Dashboard', 'N/A'))}:</strong> {html_escape(row.get('This Week Delivered', ''))}</li>"""
         else:
             highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
+            
+    logo_src = "cid:logo_img" if os.path.exists("logo.png") else EMAIL_LOGO_URL
 
     html_body = f"""
     <!DOCTYPE html>
@@ -835,10 +834,10 @@ def generate_html_email_body(df, report_title):
         <div style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
                 <tr>
-                    <td width="35%" valign="middle">
-                        <img src="{EMAIL_LOGO_URL}" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
+                    <td width="40%" valign="middle">
+                        <img src="{logo_src}" alt="FACTSPAN" width="200" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
                     </td>
-                    <td width="65%" align="right" valign="middle">
+                    <td width="60%" align="right" valign="middle">
                         <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
                         <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
                         <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
@@ -852,26 +851,31 @@ def generate_html_email_body(df, report_title):
                     Please find below the latest weekly progress snapshot for <strong>{account_team_str}</strong>.
                 </p>
                 <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
-                <table width="100%" cellpadding="0" cellspacing="10" border="0" style="margin-left: -10px; margin-right: -10px; margin-bottom: 25px;">
+                
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 25px;">
                     <tr>
-                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #f8fafc;">
-                            <div style="font-size: 28px; font-weight: bold; color: #1e293b;">{total_projects}</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
+                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
+                            <div style="font-size: 28px; font-weight: bold; color: #1e293b; font-family: Arial, sans-serif;">{total_projects}</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
                         </td>
-                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #f8fafc;">
-                            <div style="font-size: 28px; font-weight: bold; color: #16a34a;">{delivered}</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">UPDATES DELIVERED</div>
+                        <td width="2%"></td>
+                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
+                            <div style="font-size: 28px; font-weight: bold; color: #16a34a; font-family: Arial, sans-serif;">{delivered}</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">UPDATES</div>
                         </td>
-                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #fffbeb;">
-                            <div style="font-size: 28px; font-weight: bold; color: #ea580c;">{avg_comp}%</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">AVG COMPLETION</div>
+                        <td width="2%"></td>
+                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fffbeb;">
+                            <div style="font-size: 28px; font-weight: bold; color: #ea580c; font-family: Arial, sans-serif;">{avg_comp}%</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">COMPLETION</div>
                         </td>
-                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #fef2f2;">
-                            <div style="font-size: 28px; font-weight: bold; color: #dc2626;">{risks}</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">AT RISK / BLOCKED</div>
+                        <td width="2%"></td>
+                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fef2f2;">
+                            <div style="font-size: 28px; font-weight: bold; color: #dc2626; font-family: Arial, sans-serif;">{risks}</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">RISKS</div>
                         </td>
                     </tr>
                 </table>
+                
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px; table-layout: fixed;">
                     <thead>
                         <tr style="background-color: #1e293b;">
@@ -918,26 +922,11 @@ def create_pdf_report(dataframe, header_title):
     team_str = teams[0] if len(teams) == 1 else "Summary"
     account_team_str = f"{acc_str} - {team_str}"
     date_str = datetime.now(IST).strftime("%d %b %Y, %I:%M %p")
-    
-    import urllib.request
-    import tempfile
-    import ssl
-    tmp_logo = "logo.png" if os.path.exists("logo.png") else None
-    
-    if not tmp_logo:
-        try:
-            ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-            req = urllib.request.Request(EMAIL_LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, context=ctx) as response:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-                    tmp_file.write(response.read())
-                    tmp_logo = tmp_file.name
-        except Exception: pass
 
     class ReportPDF(FPDF):
         def header(self):
-            if tmp_logo:
-                try: self.image(tmp_logo, 15, 10, 40)
+            if os.path.exists("logo.png"):
+                try: self.image("logo.png", 15, 10, 40)
                 except Exception:
                     self.set_text_color(30, 41, 59); self.set_font("Arial", "B", 16)
                     self.set_xy(15, 15); self.cell(40, 10, "FACTSPAN", ln=False)
@@ -985,6 +974,7 @@ def create_pdf_report(dataframe, header_title):
             self.cell(95, 5, f"Page {self.page_no()}", align="R")
 
     pdf = ReportPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(15, 15, 15)
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
 
@@ -992,40 +982,43 @@ def create_pdf_report(dataframe, header_title):
     total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
     delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
     avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
-    avg_util = resource_utilization(dataframe) if not dataframe.empty and "Resource" in dataframe.columns else 0
     risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
 
     kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
-    box_w = 34.5; gap = 2.7; y = 40
+    box_w = 33; gap = 3.75; y = 42
     for i, (label, value) in enumerate(kpis):
         x = 15 + i * (box_w + gap)
-        pdf.set_fill_color(247, 249, 252); pdf.set_draw_color(221, 228, 236)
+        pdf.set_fill_color(248, 250, 252); pdf.set_draw_color(226, 232, 240)
         pdf.rect(x, y, box_w, 24, "DF")
-        pdf.set_text_color(102, 112, 133); pdf.set_font("Arial", "B", 6.8); pdf.set_xy(x + 2, y + 4)
-        pdf.cell(box_w - 4, 4, safe_pdf_text(label), align="C")
-        pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 15); pdf.set_xy(x + 2, y + 10)
-        pdf.cell(box_w - 4, 8, safe_pdf_text(str(value)), align="C")
-    pdf.set_y(70)
+        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "B", 6.8); pdf.set_xy(x, y + 4)
+        pdf.cell(box_w, 4, safe_pdf_text(label), align="C")
+        pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 15); pdf.set_xy(x, y + 10)
+        pdf.cell(box_w, 8, safe_pdf_text(str(value)), align="C")
+    pdf.set_y(y + 32)
 
     def section(title):
-        pdf.ln(5); y0 = pdf.get_y(); pdf.set_fill_color(37, 99, 235); pdf.rect(15, y0 + 1, 2.5, 7, "F")
-        pdf.set_xy(21, y0); pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 13)
+        pdf.ln(5); y0 = pdf.get_y()
+        pdf.set_fill_color(37, 99, 235)
+        pdf.rect(15, y0 + 1, 2.5, 7, "F")
+        pdf.set_xy(19, y0); pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 13)
         pdf.cell(170, 8, safe_pdf_text(title), ln=True); pdf.ln(1)
 
     section("Executive Summary")
+    pdf.set_x(15)
     pdf.set_text_color(52, 64, 84); pdf.set_font("Arial", "", 9.5)
     summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
-               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {avg_util}%. "
+               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {resource_utilization(dataframe)}%. "
                f"There are {risks} item(s) requiring risk or blocker attention.")
     pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
 
     section("Project Status")
-    headers = [("Project", 60, "L"), ("Resource", 28, "L"), ("Status", 28, "L"), ("Comp.", 17, "C"), ("Util.", 17, "C"), ("Expected", 30, "L")]
+    headers = [("Project", 60), ("Resource", 28), ("Status", 28), ("Comp.", 17), ("Util.", 17), ("Expected", 30)]
     pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
-    for label, width, al in headers: 
-        pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True, align=al)
+    pdf.set_x(15)
+    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True)
     pdf.ln(); pdf.set_font("Arial", "", 8.2)
     for ridx, (_, row) in enumerate(dataframe.iterrows()):
+        pdf.set_x(15)
         if ridx % 2 == 1: pdf.set_fill_color(249, 251, 253)
         else: pdf.set_fill_color(255, 255, 255)
         project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]
@@ -1034,31 +1027,36 @@ def create_pdf_report(dataframe, header_title):
         util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
         
         pdf.set_text_color(52, 64, 84)
-        pdf.cell(60, 8, project, border=1, fill=True, align="L")
-        pdf.cell(28, 8, resource[:20], border=1, fill=True, align="L")
+        pdf.cell(60, 8, project, border=1, fill=True)
+        pdf.cell(28, 8, resource[:20], border=1, fill=True)
         
         if status in ("At Risk", "Blocked"): pdf.set_text_color(160, 55, 55)
         elif status == "Completed": pdf.set_text_color(22, 128, 91)
-        pdf.cell(28, 8, status, border=1, fill=True, align="L"); pdf.set_text_color(52, 64, 84)
+        pdf.cell(28, 8, status, border=1, fill=True); pdf.set_text_color(52, 64, 84)
         
         pdf.cell(17, 8, comp, border=1, fill=True, align="C")
         pdf.cell(17, 8, util, border=1, fill=True, align="C")
-        pdf.cell(30, 8, expected, border=1, fill=True, align="L")
+        pdf.cell(30, 8, expected, border=1, fill=True)
         pdf.ln()
 
     section("Weekly Highlights")
     for _, row in dataframe.iterrows():
+        pdf.set_x(15)
         project = safe_pdf_text(row.get("Project / Dashboard", "N/A")); delivered_text = safe_pdf_text(row.get("This Week Delivered", "None reported."))
         pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, project)
+        pdf.set_x(15)
         pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, f"Delivered: {delivered_text or 'None reported.'}"); pdf.ln(1.5)
 
     risk_df = dataframe[(dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")]
     section("Risks & Blockers")
     if risk_df.empty:
+        pdf.set_x(15)
         pdf.set_text_color(22, 128, 91); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 6, safe_pdf_text("No active blockers or risks reported for this period."))
     else:
         for _, row in risk_df.iterrows():
+            pdf.set_x(15)
             pdf.set_text_color(194, 65, 61); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, safe_pdf_text(row.get("Project / Dashboard", "N/A")))
+            pdf.set_x(15)
             pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9)
             blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
             pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
@@ -1069,16 +1067,17 @@ def create_pdf_report(dataframe, header_title):
     for _, row in dataframe.iterrows():
         hs=health_score(row); priority,_=classify_attention(row)
         if priority != "Normal" or hs < 80:
+            pdf.set_x(15)
             text=f"{safe_pdf_text(row.get('Project / Dashboard','N/A'))} | Health {hs}/100 | {priority} | Action: {safe_pdf_text(suggested_action(row))}"
             pdf.multi_cell(180,5,text); pdf.ln(1)
             
     section("Delivery Outlook")
     pdf.set_font("Arial", "", 9)
     counts=Counter(delivery_bucket(r) for _,r in dataframe.iterrows())
+    pdf.set_x(15)
     pdf.multi_cell(180,5,safe_pdf_text("Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (counts.get("Overdue",0),counts.get("Next 7 Days",0),counts.get("8–14 Days",0),counts.get("15+ Days",0),counts.get("Delivered",0))))
 
     try: 
-        if tmp_logo and tmp_logo != "logo.png" and os.path.exists(tmp_logo): os.remove(tmp_logo)
         output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
     except Exception: return bytes(pdf.output())
 
@@ -1167,6 +1166,13 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, d
         html_content = generate_html_email_body(dataframe, report_title)
         msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
         msg.add_alternative(html_content, subtype='html')
+        
+        # Safely embed the local logo so it never breaks in Outlook/Gmail
+        if os.path.exists("logo.png"):
+            try:
+                with open("logo.png", "rb") as img:
+                    msg.get_payload()[1].add_related(img.read(), maintype='image', subtype='png', cid='<logo_img>')
+            except Exception: pass
     else:
         msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
         

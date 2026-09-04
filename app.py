@@ -64,7 +64,7 @@ def update_user_password_in_gsheets(email, new_hashed_pwd):
         
         for idx, row in enumerate(records):
             if str(row.get("Email", "")).strip().lower() == email.strip().lower():
-                row_idx = idx + 2 # +1 for 0-index offset, +1 for header row
+                row_idx = idx + 2 
                 u_sheet.update_cell(row_idx, col_idx, new_hashed_pwd)
                 return True
         return False
@@ -195,7 +195,6 @@ if not st.session_state.authenticated:
                     st.error("Passwords do not match.")
                 else:
                     invite_valid = False
-                    
                     if reg_role == "Team Member":
                         invite_valid = True
                     else:
@@ -386,32 +385,32 @@ def update_existing_note_in_gsheets(updated_entry):
 st.markdown("""
 <style>
 :root {
-    --app-bg: #f4f7fb; --surface: #ffffff; --primary: #16324f; --accent: #2563eb; --border: #dfe5ec;
+    --app-bg: #f4f7fb; --surface: #ffffff; --primary: #1e293b; --accent: #ea580c; --border: #dfe5ec;
     --text-main: #0f172a; --muted: #64748b; --radius-sm: 8px; --radius-md: 12px;
 }
 .stApp { background: var(--app-bg); }
 .block-container { max-width: 1440px !important; margin: 0 auto !important; padding-top: 1.5rem !important; padding-bottom: 2.5rem !important; }
 .stMarkdown, .stText, .stCaption, .stSelectbox label, .stMultiSelect label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important; }
-.stSelectbox label p, .stMultiSelect label p, .stTextInput label p, .stTextArea label p, .stNumberInput label p, .stDateInput label p, .stSelectbox label, .stMultiSelect label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { font-size: 15px !important; font-weight: bold !important; color: #16324f !important; letter-spacing: .25px !important; margin-bottom: 4px !important; }
+.stSelectbox label p, .stMultiSelect label p, .stTextInput label p, .stTextArea label p, .stNumberInput label p, .stDateInput label p, .stSelectbox label, .stMultiSelect label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { font-size: 15px !important; font-weight: bold !important; color: #1e293b !important; letter-spacing: .25px !important; margin-bottom: 4px !important; }
 [data-baseweb="select"] > div { background: linear-gradient(to bottom, #ffffff, #f8fafc) !important; border: 1px solid #cbd5e1 !important; box-shadow: 0 2px 4px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.04) !important; border-radius: 8px !important; min-height: 38px !important; transition: all 0.15s ease !important; }
 [data-baseweb="select"] > div:hover { border-color: #94a3b8 !important; box-shadow: 0 4px 6px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.05) !important; }
 .stSelectbox [data-baseweb="select"] span, .stMultiSelect [data-baseweb="select"] span { font-size: 15px !important; }
 .stMultiSelect [data-baseweb="tag"] { font-size: 14px !important; font-weight: bold !important; }
-.app-hero { background: linear-gradient(135deg, #132d47 0%, #1c4569 68%, #235c85 100%); border-radius: 18px; padding: 28px 32px; min-height: 110px; box-sizing: border-box; color: #ffffff !important; box-shadow: 0 12px 30px rgba(22, 50, 79, .18); margin-bottom: 16px; position: relative; overflow: hidden; isolation: isolate; }
+.app-hero { background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 18px; padding: 28px 32px; min-height: 110px; box-sizing: border-box; color: #ffffff !important; box-shadow: 0 12px 30px rgba(30, 41, 59, .18); margin-bottom: 16px; position: relative; overflow: hidden; isolation: isolate; border-top: 4px solid #ea580c; }
 .app-hero:after { content: ""; position: absolute; width: 260px; height: 260px; right: -80px; top: -120px; border-radius: 50%; background: rgba(255,255,255,.08); }
 .app-hero > * { position: relative; z-index: 2; }
-.app-hero-eyebrow { font-size: 13px; font-weight: bold; letter-spacing: 1.7px; text-transform: uppercase; color: #9ed8ff; margin-bottom: 6px; }
+.app-hero-eyebrow { font-size: 13px; font-weight: bold; letter-spacing: 1.7px; text-transform: uppercase; color: #cbd5e1; margin-bottom: 6px; }
 .app-hero-title { font-size: 34px; line-height: 1.15; font-weight: bold; letter-spacing: -.6px; margin: 0; color: #fff !important; }
-.app-hero-subtitle { margin-top: 8px; font-size: 15px; color: #d6e4f1 !important; }
+.app-hero-subtitle { margin-top: 8px; font-size: 15px; color: #f8fafc !important; }
 .stButton > button, .stDownloadButton > button { background: linear-gradient(to bottom, #ffffff, #f1f5f9) !important; border: 1px solid #cbd5e1 !important; box-shadow: 0 3px 0 #cbd5e1, 0 4px 6px rgba(0,0,0,0.05) !important; border-radius: 10px !important; color: #334155 !important; font-weight: bold !important; transition: all 0.1s ease-out !important; transform: translateY(0) !important; }
 .stButton > button:active, .stDownloadButton > button:active { transform: translateY(3px) !important; box-shadow: 0 0px 0 transparent, 0 0px 0px rgba(0,0,0,0) !important; }
-.stButton > button[kind="primary"] { background: linear-gradient(to bottom, var(--primary), #112840) !important; border-color: #0b1a2a !important; box-shadow: 0 3px 0 #0b1a2a, 0 5px 12px rgba(22, 50, 79, 0.3) !important; color: white !important; }
+.stButton > button[kind="primary"] { background: linear-gradient(to bottom, var(--accent), #c2410c) !important; border-color: #9a3412 !important; box-shadow: 0 3px 0 #9a3412, 0 5px 12px rgba(234, 88, 12, 0.3) !important; color: white !important; }
 div.element-container:has(.marker-nav1-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #eff6ff) !important; border-color: #bfdbfe !important; box-shadow: 0 3px 0 #bfdbfe, 0 4px 6px rgba(0,0,0,0.05) !important; color: #1e40af !important; }
-div.element-container:has(.marker-nav1-active) + div.element-container button { background: linear-gradient(to bottom, #3b82f6, #1d4ed8) !important; border-color: #1e40af !important; box-shadow: 0 3px 0 #1e40af, 0 4px 8px rgba(37,99,235,0.3) !important; color: #ffffff !important; }
+div.element-container:has(.marker-nav1-active) + div.element-container button { background: linear-gradient(to bottom, #1e293b, #0f172a) !important; border-color: #020617 !important; box-shadow: 0 3px 0 #020617, 0 4px 8px rgba(15,23,42,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav2-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #f0fdf4) !important; border-color: #bbf7d0 !important; box-shadow: 0 3px 0 #bbf7d0, 0 4px 6px rgba(0,0,0,0.05) !important; color: #166534 !important; }
 div.element-container:has(.marker-nav2-active) + div.element-container button { background: linear-gradient(to bottom, #10b981, #047857) !important; border-color: #064e3b !important; box-shadow: 0 3px 0 #064e3b, 0 4px 8px rgba(16,185,129,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav3-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #fffbeb) !important; border-color: #fde68a !important; box-shadow: 0 3px 0 #fde68a, 0 4px 6px rgba(0,0,0,0.05) !important; color: #b45309 !important; }
-div.element-container:has(.marker-nav3-active) + div.element-container button { background: linear-gradient(to bottom, #f59e0b, #b45309) !important; border-color: #78350f !important; box-shadow: 0 3px 0 #78350f, 0 4px 8px rgba(245,158,11,0.3) !important; color: #ffffff !important; }
+div.element-container:has(.marker-nav3-active) + div.element-container button { background: linear-gradient(to bottom, #ea580c, #c2410c) !important; border-color: #9a3412 !important; box-shadow: 0 3px 0 #9a3412, 0 4px 8px rgba(234,88,12,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav4-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #fff1f2) !important; border-color: #fecdd3 !important; box-shadow: 0 3px 0 #fecdd3, 0 4px 6px rgba(0,0,0,0.05) !important; color: #9f1239 !important; }
 div.element-container:has(.marker-nav4-active) + div.element-container button { background: linear-gradient(to bottom, #ef4444, #b91c1c) !important; border-color: #7f1d1d !important; box-shadow: 0 3px 0 #7f1d1d, 0 4px 8px rgba(239,68,68,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-send) + div.element-container button { background: linear-gradient(to bottom, #f5f3ff, #ede9fe) !important; border-color: #c4b5fd !important; box-shadow: 0 3px 0 #c4b5fd, 0 4px 6px rgba(0,0,0,0.05) !important; color: #5b21b6 !important; }
@@ -425,7 +424,7 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .section-header:before { content: ""; width: 5px; height: 22px; background: var(--accent); border-radius: 3px; }
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 12px !important; border-color: var(--border) !important; box-shadow: var(--shadow-sm) !important; background: var(--surface) !important; }
 .card-title { font-size: 17px; font-weight: bold; color: var(--primary) !important; margin-bottom: 3px; }
-.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 15px 18px; box-shadow: var(--shadow-sm); min-height: 85px; border-top: 4px solid var(--blue); transition: transform .18s ease, box-shadow .18s ease; }
+.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 15px 18px; box-shadow: var(--shadow-sm); min-height: 85px; border-top: 4px solid var(--accent); transition: transform .18s ease, box-shadow .18s ease; }
 .kpi-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .kpi-label { font-size: 12px; color: var(--muted) !important; font-weight: bold; letter-spacing: .8px; }
 .kpi-value { margin-top: 5px; font-size: 32px; line-height: 1; font-weight: bold; color: var(--primary) !important; }
@@ -437,15 +436,15 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .work-type { font-size: 13px; color: var(--muted); display:block; margin-top:2px; }
 .status-pill { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; font-size: 12px; font-weight: bold; border: 1px solid transparent; }
 .status-on-track { background:#ecfdf5; color:#16805b; border-color:#a7f3d0; }
-.status-in-progress { background:#fffbeb; color:#b7791f; border-color:#fde68a; }
+.status-in-progress { background:#fffbeb; color:#ea580c; border-color:#fde68a; }
 .status-blocked { background:#fef2f2; color:#c2413d; border-color:#fecaca; }
 .status-completed { background:#eff6ff; color:#2563eb; border-color:#bfdbfe; }
 .status-not-started { background:#f2f4f7; color:#667085; border-color:#d0d5dd; }
 .summary-box { background: #f8fafc; border-radius: 8px; color: #334155; font-size: 1.15rem; line-height: 1.6; margin-bottom: 2.5rem; padding: 1.25rem; border: 1px solid #e2e8f0; }
-.risk-box { background-color: #fef2f2; border-left: 5px solid #dc2626; padding: 1.25rem; margin-bottom: 1rem; border-radius: 6px; }
+.risk-box { background-color: #fff7ed; border-left: 5px solid #ea580c; padding: 1.25rem; margin-bottom: 1rem; border-radius: 6px; }
 .risk-title { color: #0f172a; font-size: 1.05rem; font-weight: 700; margin-bottom: 0.25rem; }
 .risk-desc { color: #334155; font-size: 0.95rem; }
-.acc-header { background: linear-gradient(90deg,#173654,#214f77); color:#fff !important; padding:9px 14px; border-radius:10px; font-size:17px; font-weight:bold; margin:13px 0 7px 0; }
+.acc-header { background: linear-gradient(90deg,#1e293b,#334155); color:#fff !important; padding:9px 14px; border-radius:10px; font-size:17px; font-weight:bold; margin:13px 0 7px 0; }
 .team-header { color:var(--primary) !important; font-size:15px; font-weight:bold; padding:5px 2px; border-bottom:2px solid #e6ebf1; margin:7px 0 5px; }
 .edit-banner { background:#eff6ff; color:#2563eb !important; border:1px solid #bfdbfe; padding:8px 11px; border-radius:9px; font-size:13px; font-weight:bold; margin-bottom:10px; }
 .block-container .stVerticalBlock { gap: .8rem !important; }
@@ -453,20 +452,18 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .action-attention { background:#fffbeb; border:1px solid #fde68a; border-left:5px solid #d97706; padding:12px 14px; border-radius:10px; margin:8px 0; }
 hr { margin: 12px 0 !important; border-color:#e6ebf1 !important; }
 
-/* V2 enterprise refinements — additive UI only */
 .filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
 .filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
 .filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
-.filter-chip { display:inline-block; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; }
+.filter-chip { display:inline-block; background:#fff7ed; color:#ea580c; border:1px solid #fdba74; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; }
 .health-strip { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:12px 15px; margin:8px 0 15px; }
 .health-title { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:#64748b; font-weight:800; }
-.health-score { font-size:25px; font-weight:800; color:#16324f; }
+.health-score { font-size:25px; font-weight:800; color:#1e293b; }
 .health-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
 .mini-insight { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; font-size:13px; color:#334155; }
 .login-meta { text-align:center; color:#94a3b8; font-size:11px; margin-top:8px; }
 .section-note { color:#64748b; font-size:12px; margin-top:-5px; margin-bottom:8px; }
 .compact-row { border-bottom:1px solid #edf1f5; padding:9px 4px; }
-.app-user { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -489,7 +486,6 @@ if 'project_search' not in st.session_state: st.session_state.project_search = "
 if 'executive_compact' not in st.session_state: st.session_state.executive_compact = False
 if 'copy_source_loaded' not in st.session_state: st.session_state.copy_source_loaded = False
 
-# Dynamically populate account and team options based on cloud data
 st.session_state.accounts_db = {}
 if st.session_state.notes_db:
     live_df = pd.DataFrame(st.session_state.notes_db)
@@ -500,11 +496,9 @@ if st.session_state.notes_db:
 # HELPERS
 # =========================================================
 def html_escape(value):
-    """Safely escape strings for HTML rendering."""
     return html.escape("" if value is None else str(value))
 
 def safe_pdf_text(value):
-    """Safely format strings for FPDF latin-1 encoding."""
     text = "" if value is None else str(value)
     replacements = {"–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", "•":"-", "✓":"OK", "⚠":"!", "×":"x"}
     for old, new in replacements.items(): text = text.replace(old, new)
@@ -533,11 +527,8 @@ def parse_date(date_str):
     except Exception: return None
 
 def pct_value(value):
-    """Return percentage as a numeric 0-100 value without raising errors."""
-    try:
-        return max(0.0, min(100.0, float(str(value).replace("%", "").strip())))
-    except Exception:
-        return 0.0
+    try: return max(0.0, min(100.0, float(str(value).replace("%", "").strip())))
+    except Exception: return 0.0
 
 def normalize_text(value):
     return str(value or "").strip().lower()
@@ -546,7 +537,6 @@ def is_blank(value):
     return normalize_text(value) in {"", "none", "na", "n/a", "nan"}
 
 def user_can_edit_row(row):
-    """Server-side edit authorization; UI permissions are not trusted for writes."""
     role = st.session_state.get("current_role", "")
     email = normalize_text(st.session_state.get("current_email", ""))
     scopes = [normalize_text(x) for x in st.session_state.get("current_scope", "").split(",") if normalize_text(x)]
@@ -586,7 +576,6 @@ def delivery_bucket(row, as_of=None):
     return "15+ Days"
 
 def health_score(row, as_of=None):
-    """Deterministic 0-100 project health score based only on existing fields."""
     as_of = as_of or datetime.now(IST).date()
     score = 100
     status = normalize_text(row.get("Status"))
@@ -614,12 +603,9 @@ def data_quality_flags(row):
     status = normalize_text(row.get("Status"))
     comp = pct_value(row.get("Completion %"))
     due = date_from_row(row)
-    if status == "completed" and comp < 100:
-        flags.append("Completed but completion is below 100%")
-    if comp >= 100 and status != "completed":
-        flags.append("Completion is 100% but status is not Completed")
-    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")):
-        flags.append("Risk/blocked status without a blocker explanation")
+    if status == "completed" and comp < 100: flags.append("Completed but completion is below 100%")
+    if comp >= 100 and status != "completed": flags.append("Completion is 100% but status is not Completed")
+    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")): flags.append("Risk/blocked status without a blocker explanation")
     start = parse_date(row.get("Start date"))
     initial = parse_date(row.get("Initial Delivery date"))
     if start and initial and initial < start: flags.append("Initial delivery date is before start date")
@@ -627,10 +613,8 @@ def data_quality_flags(row):
     if status == "cancelled" and comp > 0: flags.append("Cancelled item has non-zero completion")
     if status == "not started" and comp > 0: flags.append("Not Started item has non-zero completion")
     if status == "completed" and due and due > datetime.now(IST).date(): flags.append("Completed item has a future delivery date")
-    if due and status != "completed" and due < datetime.now(IST).date():
-        flags.append("Expected delivery date is overdue")
-    if is_blank(row.get("This Week Delivered")):
-        flags.append("No weekly delivery update reported")
+    if due and status != "completed" and due < datetime.now(IST).date(): flags.append("Expected delivery date is overdue")
+    if is_blank(row.get("This Week Delivered")): flags.append("No weekly delivery update reported")
     util = pct_value(row.get("Utilization %"))
     if util > 100: flags.append("Utilization exceeds 100%")
     if is_blank(row.get("Business Owner")): flags.append("Business owner is missing")
@@ -638,39 +622,28 @@ def data_quality_flags(row):
     return flags
 
 def classify_attention(row, as_of=None):
-    """Return a priority label and reasons. Existing statuses remain authoritative."""
     as_of = as_of or datetime.now(IST).date()
     status = normalize_text(row.get("Status"))
     reasons = []
     priority = "Normal"
-
     if status == "blocked":
-        priority = "Critical"
-        reasons.append("Blocked")
+        priority = "Critical"; reasons.append("Blocked")
     elif status == "at risk":
-        priority = "Critical"
-        reasons.append("At Risk")
+        priority = "Critical"; reasons.append("At Risk")
     elif status == "on hold":
-        priority = "Attention"
-        reasons.append("On Hold")
-
+        priority = "Attention"; reasons.append("On Hold")
     due = date_from_row(row)
     if due and status != "completed":
         days = (due - as_of).days
         if days < 0:
-            priority = "Critical"
-            reasons.append(f"Overdue by {abs(days)} day(s)")
+            priority = "Critical"; reasons.append(f"Overdue by {abs(days)} day(s)")
         elif days <= 7:
-            if priority == "Normal":
-                priority = "Attention"
+            if priority == "Normal": priority = "Attention"
             reasons.append(f"Due in {days} day(s)")
-
     dq = data_quality_flags(row)
     if dq:
-        if priority == "Normal":
-            priority = "Attention"
+        if priority == "Normal": priority = "Attention"
         reasons.extend(dq)
-
     return priority, reasons
 
 def suggested_action(row):
@@ -691,7 +664,6 @@ def portfolio_health(df):
     return int(sum(health_score(r) for _, r in df.iterrows()) / len(df)), Counter(labels)
 
 def resource_utilization(df):
-    """Use the mean of project utilization values per resource, then average resources; avoids summing project percentages."""
     if df.empty or "Resource" not in df.columns: return 0
     vals = []
     for _, group in df.groupby("Resource"):
@@ -705,7 +677,6 @@ def delivery_slippage_days(row):
     return 0
 
 def historical_trend(df, periods=8):
-    """Build a lightweight historical trend table from the existing Year/Month/Week fields."""
     if df.empty or not {"Year","Month","Week"}.issubset(df.columns): return pd.DataFrame()
     month_order={m:i for i,m in enumerate(["January","February","March","April","May","June","July","August","September","October","November","December"],1)}
     w=df.copy(); w["_y"]=pd.to_numeric(w["Year"],errors="coerce"); w["_m"]=w["Month"].map(month_order); w["_w"]=pd.to_numeric(w["Week"].astype(str).str.extract(r"(\d+)")[0],errors="coerce"); w["_p"]=w["_y"]*100+w["_m"]*10+w["_w"]; w=w.dropna(subset=["_p"]).sort_values("_p")
@@ -716,133 +687,72 @@ def historical_trend(df, periods=8):
         rows.append({"Period":label,"Projects":len(g),"Resources":g["Resource"].nunique(),"Avg Completion":round(sum(pct_value(x) for x in g["Completion %"])/max(1,len(g)),1),"Avg Utilization":resource_utilization(g),"Critical":sum(1 for _,r in g.iterrows() if classify_attention(r)[0]=="Critical"),"Overdue":sum(1 for _,r in g.iterrows() if delivery_bucket(r)=="Overdue")})
     return pd.DataFrame(rows[-periods:])
 
-def current_period_label(df):
-    if df.empty: return "Current selection"
-    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
-    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
-    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
-    if len(years)==1 and len(months)==1 and len(weeks)==1: return f"{months[0]} {years[0]} · {weeks[0]}"
-    return "Current selection"
-
 def write_audit_event(action, row_id, old_row=None, new_row=None):
-    """Best-effort audit trail in a separate Google Sheet tab; never blocks normal save/update."""
     try:
         client = get_gspread_client()
         spreadsheet = client.open("Weekly Notes Database")
-        try:
-            sheet = spreadsheet.worksheet("Audit Log")
+        try: sheet = spreadsheet.worksheet("Audit Log")
         except Exception:
             sheet = spreadsheet.add_worksheet(title="Audit Log", rows=1000, cols=8)
             sheet.append_row(["Timestamp","Action","Record ID","User Name","User Email","Role","Before","After"])
         sheet.append_row([datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"), action, str(row_id), st.session_state.get("current_name",""), st.session_state.get("current_email",""), st.session_state.get("current_role",""), str(old_row or {}), str(new_row or {})])
-    except Exception:
-        pass
+    except Exception: pass
 
 def get_latest_prior_week(df, selected_year=None, selected_month=None, selected_week=None):
-    """Find the immediately preceding reported week using the app's Year/Month/Week fields."""
-    if df.empty or not {"Year", "Month", "Week"}.issubset(df.columns):
-        return pd.DataFrame()
-
+    if df.empty or not {"Year", "Month", "Week"}.issubset(df.columns): return pd.DataFrame()
     work = df.copy()
-    month_order = {m: i for i, m in enumerate([
-        "January","February","March","April","May","June",
-        "July","August","September","October","November","December"
-    ], 1)}
-    work["_year"] = pd.to_numeric(work["Year"], errors="coerce")
-    work["_month_num"] = work["Month"].map(month_order)
-    work["_week_num"] = pd.to_numeric(
-        work["Week"].astype(str).str.extract(r"(\d+)")[0], errors="coerce"
-    )
+    month_order = {m: i for i, m in enumerate(["January","February","March","April","May","June","July","August","September","October","November","December"], 1)}
+    work["_year"] = pd.to_numeric(work["Year"], errors="coerce"); work["_month_num"] = work["Month"].map(month_order); work["_week_num"] = pd.to_numeric(work["Week"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
     work["_period"] = work["_year"] * 100 + work["_month_num"] * 10 + work["_week_num"]
-
-    if selected_year is None or selected_month is None or selected_week is None:
-        return pd.DataFrame()
-
+    if selected_year is None or selected_month is None or selected_week is None: return pd.DataFrame()
     current_month_num = month_order.get(str(selected_month))
     current_week_num_match = re.search(r"(\d+)", str(selected_week))
     current_week_num = int(current_week_num_match.group(1)) if current_week_num_match else None
-    if current_month_num is None or current_week_num is None:
-        return pd.DataFrame()
-
+    if current_month_num is None or current_week_num is None: return pd.DataFrame()
     current_period = int(selected_year) * 100 + current_month_num * 10 + current_week_num
     prior = work[work["_period"] < current_period]
-    if prior.empty:
-        return pd.DataFrame()
+    if prior.empty: return pd.DataFrame()
     prior_period = prior["_period"].max()
     return prior[prior["_period"] == prior_period].drop(columns=["_year","_month_num","_week_num","_period"], errors="ignore")
 
 def compare_current_to_prior(current_df, prior_df):
-    """Create project-level movement signals without changing source data."""
-    if current_df.empty or prior_df.empty:
-        return pd.DataFrame()
-    prior_map = {}
-    for _, row in prior_df.iterrows():
-        prior_map[row_project_key(row)] = row
-
+    if current_df.empty or prior_df.empty: return pd.DataFrame()
+    prior_map = {row_project_key(row): row for _, row in prior_df.iterrows()}
     records = []
     for _, row in current_df.iterrows():
         key = row_project_key(row)
         prev = prior_map.get(key)
         if prev is None:
-            movement = "New"
-            comp_delta = None
-            util_delta = None
-            status_change = "New this period"
+            movement = "New"; comp_delta = None; util_delta = None; status_change = "New this period"
         else:
             comp_delta = pct_value(row.get("Completion %")) - pct_value(prev.get("Completion %"))
             util_delta = pct_value(row.get("Utilization %")) - pct_value(prev.get("Utilization %"))
-            prev_status = str(prev.get("Status", ""))
-            curr_status = str(row.get("Status", ""))
+            prev_status = str(prev.get("Status", "")); curr_status = str(row.get("Status", ""))
             status_change = f"{prev_status} → {curr_status}" if prev_status != curr_status else "No status change"
-            if comp_delta >= 10:
-                movement = "Improved"
-            elif comp_delta <= -10:
-                movement = "Declined"
-            else:
-                movement = "Stable"
-        records.append({
-            "Project / Dashboard": row.get("Project / Dashboard", ""),
-            "Resource": row.get("Resource", ""),
-            "Movement": movement,
-            "Completion Δ": comp_delta,
-            "Utilization Δ": util_delta,
-            "Status Change": status_change,
-        })
+            if comp_delta >= 10: movement = "Improved"
+            elif comp_delta <= -10: movement = "Declined"
+            else: movement = "Stable"
+        records.append({"Project / Dashboard": row.get("Project / Dashboard", ""), "Resource": row.get("Resource", ""), "Movement": movement, "Completion Δ": comp_delta, "Utilization Δ": util_delta, "Status Change": status_change})
     return pd.DataFrame(records)
 
 def build_action_items(dataframe):
     items = []
-    if dataframe.empty:
-        return items
+    if dataframe.empty: return items
     for _, row in dataframe.iterrows():
         priority, reasons = classify_attention(row)
         if priority != "Normal":
-            items.append({
-                "Priority": priority,
-                "Project / Dashboard": row.get("Project / Dashboard", ""),
-                "Account": row.get("Account", ""),
-                "Team": row.get("Team", ""),
-                "Resource": row.get("Resource", ""),
-                "Status": row.get("Status", ""),
-                "Delivery": delivery_state(row),
-                "Reason": "; ".join(dict.fromkeys(reasons)),
-                "Recommended Action": suggested_action(row),
-            })
+            items.append({"Priority": priority, "Project / Dashboard": row.get("Project / Dashboard", ""), "Account": row.get("Account", ""), "Team": row.get("Team", ""), "Resource": row.get("Resource", ""), "Status": row.get("Status", ""), "Delivery": delivery_state(row), "Reason": "; ".join(dict.fromkeys(reasons)), "Recommended Action": suggested_action(row)})
     rank = {"Critical": 0, "Attention": 1, "Normal": 2}
     items.sort(key=lambda x: (rank.get(x["Priority"], 9), x["Project / Dashboard"]))
     return items
 
 def refresh_cloud_data(show_message=True):
-    """Explicitly refresh Google Sheets data while preserving the existing data model."""
     with st.spinner("Refreshing data from Google Sheets..."):
         latest = load_data_from_gsheets()
     if latest:
-        st.session_state.notes_db = latest
-        st.session_state.data_synced = True
-        if show_message:
-            st.success(f"Data refreshed successfully — {len(latest)} record(s) loaded.")
-    else:
-        st.warning("Refresh returned no records. Existing session data was retained.")
+        st.session_state.notes_db = latest; st.session_state.data_synced = True
+        if show_message: st.success(f"Data refreshed successfully — {len(latest)} record(s) loaded.")
+    else: st.warning("Refresh returned no records. Existing session data was retained.")
     st.session_state.accounts_db = {}
     if st.session_state.notes_db:
         live_df = pd.DataFrame(st.session_state.notes_db)
@@ -850,188 +760,18 @@ def refresh_cloud_data(show_message=True):
             for acc in live_df["Account"].dropna().unique():
                 st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].dropna().unique().tolist()
 
-def create_pdf_report(dataframe, header_title):
-    if not FPDF_AVAILABLE: return None
-    
-    class ReportPDF(FPDF):
-        def footer(self):
-            self.set_y(-12)
-            self.set_draw_color(221, 228, 236)
-            self.line(15, 286, 195, 286)
-            self.set_text_color(120, 130, 145)
-            self.set_font("Arial", "", 7)
-            self.cell(90, 5, "Weekly Project Report", align="L")
-            self.cell(90, 5, f"Page {self.page_no()}", align="R")
-
-    pdf = ReportPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=17)
-    pdf.add_page()
-    pdf.set_fill_color(22, 50, 79)
-    pdf.rect(0, 0, 210, 44, "F")
-    pdf.set_text_color(158, 216, 255)
-    pdf.set_font("Arial", "B", 8)
-    pdf.set_xy(15, 9)
-    pdf.cell(170, 4, safe_pdf_text("WEEKLY PROJECT MANAGEMENT"), ln=True)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Arial", "B", 21)
-    pdf.set_xy(15, 15)
-    pdf.cell(170, 9, safe_pdf_text("WEEKLY PROJECT REPORT"), ln=True)
-    pdf.set_text_color(218, 231, 242)
-    pdf.set_font("Arial", "", 9.5)
-    pdf.set_xy(15, 27)
-    pdf.cell(170, 5, safe_pdf_text(header_title), ln=True)
-    pdf.set_font("Arial", "", 7.5)
-    pdf.set_xy(15, 35)
-    pdf.cell(170, 4, safe_pdf_text(f"Generated: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}"), ln=True)
-
-    total_projects = len(dataframe)
-    total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
-    delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
-    avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
-    avg_util = resource_utilization(dataframe) if not dataframe.empty and "Resource" in dataframe.columns else 0
-    risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
-
-    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
-    box_w = 34.5; gap = 2.7; y = 50
-    for i, (label, value) in enumerate(kpis):
-        x = 15 + i * (box_w + gap)
-        pdf.set_fill_color(247, 249, 252); pdf.set_draw_color(221, 228, 236)
-        pdf.rect(x, y, box_w, 24, "DF")
-        pdf.set_text_color(102, 112, 133); pdf.set_font("Arial", "B", 6.8); pdf.set_xy(x + 2, y + 4)
-        pdf.cell(box_w - 4, 4, safe_pdf_text(label), align="C")
-        pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 15); pdf.set_xy(x + 2, y + 10)
-        pdf.cell(box_w - 4, 8, safe_pdf_text(value), align="C")
-    pdf.set_y(82)
-
-    def section(title):
-        pdf.ln(5); y0 = pdf.get_y(); pdf.set_fill_color(37, 99, 235); pdf.rect(15, y0 + 1, 2.5, 7, "F")
-        pdf.set_xy(21, y0); pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 13)
-        pdf.cell(170, 8, safe_pdf_text(title), ln=True); pdf.ln(1)
-
-    section("Executive Summary")
-    pdf.set_text_color(52, 64, 84); pdf.set_font("Arial", "", 9.5)
-    summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
-               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {avg_util}%. "
-               f"There are {risks} item(s) requiring risk or blocker attention.")
-    pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
-
-    section("Project Status")
-    headers = [("Project", 60), ("Resource", 28), ("Status", 28), ("Comp.", 17), ("Util.", 17), ("Expected", 30)]
-    pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
-    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True)
-    pdf.ln(); pdf.set_font("Arial", "", 8.2)
-    for ridx, (_, row) in enumerate(dataframe.iterrows()):
-        if ridx % 2 == 1: pdf.set_fill_color(249, 251, 253)
-        else: pdf.set_fill_color(255, 255, 255)
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]; resource = safe_pdf_text(row.get("Resource", "N/A"))[:17]
-        status = safe_pdf_text(row.get("Status", "N/A"))[:15]; comp = safe_pdf_text(row.get("Completion %", "N/A"))
-        util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
-        pdf.set_text_color(52, 64, 84); pdf.cell(60, 8, project, border=1, fill=True); pdf.cell(28, 8, resource, border=1, fill=True)
-        if status in ("At Risk", "Blocked"): pdf.set_text_color(160, 55, 55)
-        elif status == "Completed": pdf.set_text_color(22, 128, 91)
-        pdf.cell(28, 8, status, border=1, fill=True); pdf.set_text_color(52, 64, 84)
-        pdf.cell(17, 8, comp, border=1, fill=True, align="C"); pdf.cell(17, 8, util, border=1, fill=True, align="C")
-        pdf.cell(30, 8, expected, border=1, fill=True); pdf.ln()
-
-    section("Weekly Highlights")
-    for _, row in dataframe.iterrows():
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A")); delivered_text = safe_pdf_text(row.get("This Week Delivered", "None reported."))
-        pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, project)
-        pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, f"Delivered: {delivered_text or 'None reported.'}"); pdf.ln(1.5)
-
-    risk_df = dataframe[(dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")]
-    section("Risks & Blockers")
-    if risk_df.empty:
-        pdf.set_text_color(22, 128, 91); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 6, safe_pdf_text("No active blockers or risks reported for this period."))
-    else:
-        for _, row in risk_df.iterrows():
-            pdf.set_text_color(194, 65, 61); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, safe_pdf_text(row.get("Project / Dashboard", "N/A")))
-            pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9)
-            blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
-            pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
-
-    pdf.add_page()
-    section("Management Actions & Health")
-    pdf.set_text_color(52,64,84); pdf.set_font("Arial", "", 9)
-    for _, row in dataframe.iterrows():
-        hs=health_score(row); priority,_=classify_attention(row)
-        if priority != "Normal" or hs < 80:
-            text=f"{safe_pdf_text(row.get('Project / Dashboard','N/A'))} | Health {hs}/100 | {priority} | Action: {safe_pdf_text(suggested_action(row))}"
-            pdf.multi_cell(180,5,text); pdf.ln(1)
-    section("Delivery Outlook")
-    pdf.set_font("Arial", "", 9)
-    counts=Counter(delivery_bucket(r) for _,r in dataframe.iterrows())
-    pdf.multi_cell(180,5,safe_pdf_text("Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (counts.get("Overdue",0),counts.get("Next 7 Days",0),counts.get("8–14 Days",0),counts.get("15+ Days",0),counts.get("Delivered",0))))
-
-    try: output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
-    except Exception: return bytes(pdf.output())
-
-def create_excel_report(dataframe, report_title):
-    buffer = io.BytesIO()
-    wb = Workbook() if OPENPYXL_AVAILABLE else None
-    if wb is None:
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: dataframe.to_excel(writer, index=False, sheet_name="Weekly Notes")
-        return buffer.getvalue()
-
-    ws = wb.active; ws.title = "Weekly Notes"
-    cols = ["Resource", "Business Owner", "Project / Dashboard", "Start date", "Initial Delivery date", "Updated Expected Delivery date", "Work Type", "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", "Status", "Blocker"]
-    date_str = report_title.split(": ")[-1] if ": " in report_title else report_title
-    ws["A1"] = date_str; ws["A1"].fill = PatternFill("solid", fgColor="FFD966"); ws["A1"].font = Font(bold=True); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    ws["B1"] = f"Weekly Notes ({date_str})"; ws["B1"].fill = PatternFill("solid", fgColor="004B87"); ws["B1"].font = Font(bold=True, color="FFFFFF"); ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
-    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=len(cols)); ws.row_dimensions[1].height = 25
-    header_fill = PatternFill("solid", fgColor="DDEBF7"); header_font = Font(bold=True); thin_border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
-    for c_idx, col_name in enumerate(cols, 1):
-        cell = ws.cell(row=2, column=c_idx, value=col_name); cell.fill = header_fill; cell.font = header_font; cell.border = thin_border; cell.alignment = Alignment(horizontal="center", vertical="bottom", wrap_text=True)
-    ws.row_dimensions[2].height = 35
-    resource_fill = PatternFill("solid", fgColor="FCE4D6"); owner_fill = PatternFill("solid", fgColor="E2EFDA")
-    for r_idx, row in enumerate(dataframe.to_dict('records'), 3):
-        for c_idx, col_name in enumerate(cols, 1):
-            val = row.get(col_name, ""); cell = ws.cell(row=r_idx, column=c_idx, value=val); cell.border = thin_border; cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if col_name == "Resource": cell.fill = resource_fill; cell.font = Font(bold=True, color="004B87")
-            elif col_name == "Business Owner": cell.fill = owner_fill; cell.font = Font(bold=True, color="004B87")
-            elif col_name == "Status": cell.font = Font(bold=True)
-    widths = {"A": 16, "B": 14, "C": 30, "D": 11, "E": 11, "F": 13, "G": 22, "H": 38, "I": 35, "J": 12, "K": 12, "L": 14, "M": 38}
-    for col_letter, width in widths.items(): ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A3"; ws.auto_filter.ref = f"A2:M{max(2,len(dataframe)+2)}"
-
-    ex = wb.create_sheet("Executive Summary")
-    score, counts = portfolio_health(dataframe)
-    avg_completion = int(round(sum(pct_value(x) for x in dataframe["Completion %"])/max(1,len(dataframe)))) if not dataframe.empty else 0
-    metrics=[("Report Period",current_period_label(dataframe)),("Projects",len(dataframe)),("Resources",dataframe["Resource"].nunique() if not dataframe.empty else 0),("Avg Completion",f"{avg_completion}%"),("Avg Utilization",f"{resource_utilization(dataframe)}%"),("Portfolio Health",f"{score}/100"),("Healthy",counts.get("Healthy",0)),("Attention",counts.get("Attention",0)),("Critical",counts.get("Critical",0))]
-    ex.append(["Executive Summary",""]); ex.merge_cells("A1:B1"); ex["A1"].font=Font(size=16,bold=True,color="FFFFFF"); ex["A1"].fill=PatternFill("solid",fgColor="004B87")
-    for k,v in metrics: ex.append([k,v])
-    for cell in ex["A"]: cell.font=Font(bold=True)
-    ex.column_dimensions["A"].width=25; ex.column_dimensions["B"].width=35; ex.freeze_panes="A2"
-
-    ra = wb.create_sheet("Risks & Actions")
-    action_items=build_action_items(dataframe); ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
-    for item in action_items: ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
-
-    wow = wb.create_sheet("Week-over-Week")
-    yrs=list(dataframe["Year"].unique()) if not dataframe.empty else []; mos=list(dataframe["Month"].unique()) if not dataframe.empty else []; wks=list(dataframe["Week"].unique()) if not dataframe.empty else []
-    mv=compare_current_to_prior(dataframe,get_latest_prior_week(dataframe,yrs[0],mos[0],wks[0])) if len(yrs)==len(mos)==len(wks)==1 else pd.DataFrame()
-    if mv.empty: wow.append(["Select exactly one Year, Month and Week in the app to populate week-over-week movement."])
-    else:
-        wow.append(list(mv.columns)); [wow.append(list(r)) for r in mv.itertuples(index=False,name=None)]
-
-    dq=wb.create_sheet("Data Quality")
-    dq.append(["Project / Dashboard","Resource","Status","Issues"])
-    for _,r in dataframe.iterrows():
-        flags=data_quality_flags(r)
-        if flags: dq.append([r.get("Project / Dashboard",""),r.get("Resource",""),r.get("Status",""),"; ".join(flags)])
-
-    for sh in [ex,ra,wow,dq]:
-        for cell in sh[1]: cell.font=Font(bold=True); cell.fill=PatternFill("solid",fgColor="DDEBF7"); cell.alignment=Alignment(wrap_text=True)
-        for col in range(1, sh.max_column+1): sh.column_dimensions[get_column_letter(col)].width=min(45,max(14,sh.column_dimensions[get_column_letter(col)].width or 14))
-        sh.freeze_panes="A2"
-    wb.save(buffer); return buffer.getvalue()
-
 def generate_html_email_body(df, report_title):
     total_projects = len(df)
-    delivered = int((df["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum())
+    delivered = int((df["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not df.empty else 0
     avg_comp = int(df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not df.empty else 0
-    risks = int(((df["Status"].isin(["At Risk", "Blocked"])) | (df["Blocker"].fillna("").astype(str).str.strip() != "")).sum())
+    risks = int(((df["Status"].isin(["At Risk", "Blocked"])) | (df["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not df.empty else 0
     date_str = datetime.now(IST).strftime("%d %b %Y")
+
+    accounts = list(df["Account"].dropna().unique()) if "Account" in df else []
+    teams = list(df["Team"].dropna().unique()) if "Team" in df else []
+    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
+    team_str = teams[0] if len(teams) == 1 else "Summary"
+    account_team_str = html_escape(f"{acc_str} - {team_str}")
 
     table_rows = ""
     for _, row in df.iterrows():
@@ -1041,7 +781,7 @@ def generate_html_email_body(df, report_title):
         status = html_escape(row.get("Status", "On Track"))
         comp = int(pct_value(row.get("Completion %")))
         due = html_escape(row.get("Updated Expected Delivery date", "N/A"))
-        status_color = "#16a34a" if status == "Completed" else ("#dc2626" if status in ["At Risk", "Blocked"] else "#64748b")
+        status_color = "#16a34a" if status == "Completed" else ("#ea580c" if status in ["At Risk", "In Progress"] else ("#dc2626" if status == "Blocked" else "#64748b"))
 
         table_rows += f"""
         <tr>
@@ -1065,10 +805,10 @@ def generate_html_email_body(df, report_title):
     critical_items = [x for x in action_items if x["Priority"] == "Critical"]
     
     if critical_items:
-        for item in critical_items[:3]:
+        for item in critical_items[:4]:
             highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item['Project / Dashboard'])}:</strong> {html_escape(item['Reason'])}. <em>Action: {html_escape(item['Recommended Action'])}</em></li>"""
     else:
-        recent_updates = df[df["This Week Delivered"].str.strip() != ""].head(3)
+        recent_updates = df[df["This Week Delivered"].str.strip() != ""].head(4)
         for _, row in recent_updates.iterrows():
             highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row['Project / Dashboard'])}:</strong> {html_escape(row['This Week Delivered'])}</li>"""
     
@@ -1083,12 +823,12 @@ def generate_html_email_body(df, report_title):
         <div style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
                 <tr>
-                    <td width="30%" valign="middle">
-                        <img src="https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png" alt="Factspan" width="180" style="display: block; border: 0;" />
+                    <td width="35%" valign="middle">
+                        <img src="https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
                     </td>
-                    <td width="70%" align="right" valign="middle">
-                        <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">FACTSPAN REPORTING</div>
-                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">Weekly Project Report</div>
+                    <td width="65%" align="right" valign="middle">
+                        <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
+                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
                         <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot • {date_str}</div>
                     </td>
                 </tr>
@@ -1097,7 +837,7 @@ def generate_html_email_body(df, report_title):
             <div style="padding: 25px;">
                 <p style="color: #334155; font-size: 14px; margin-top: 0;">Hi Team,</p>
                 <p style="color: #475569; font-size: 14px; line-height: 1.6; margin-bottom: 25px;">
-                    Please find below the latest weekly progress snapshot for the <strong>{html_escape(report_title)}</strong>.
+                    Please find below the latest weekly progress snapshot for <strong>{account_team_str}</strong>.
                 </p>
                 <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
                 <table width="100%" cellpadding="0" cellspacing="10" border="0" style="margin-left: -10px; margin-right: -10px; margin-bottom: 25px;">
@@ -1125,9 +865,9 @@ def generate_html_email_body(df, report_title):
                         <tr style="background-color: #1e293b;">
                             <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">PROJECT / OWNER</th>
                             <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">RESOURCE</th>
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">LEARNING PROGRESS</th>
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">DELIVERY PROGRESS</th>
                             <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">TARGET DATE</th>
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">EXAM STATUS</th>
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">STATUS</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1135,7 +875,7 @@ def generate_html_email_body(df, report_title):
                     </tbody>
                 </table>
                 <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px;">
-                    <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates</h4>
+                    <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
                     <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 14px; line-height: 1.6;">
                         {highlights_html}
                     </ul>
@@ -1144,7 +884,7 @@ def generate_html_email_body(df, report_title):
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #1e293b; padding: 15px 25px;">
                 <tr>
                     <td align="left" style="color: #f1f5f9; font-size: 11px;">
-                        Factspan • Weekly Project Report • {html_escape(report_title)}
+                        Factspan &bull; {account_team_str}
                     </td>
                     <td align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">
                         Staying Relevant and Ahead through Fluid Intelligence
@@ -1156,6 +896,201 @@ def generate_html_email_body(df, report_title):
     </html>
     """
     return html_body
+
+def create_pdf_report(dataframe, header_title):
+    if not FPDF_AVAILABLE: return None
+
+    accounts = list(dataframe["Account"].dropna().unique()) if "Account" in dataframe else []
+    teams = list(dataframe["Team"].dropna().unique()) if "Team" in dataframe else []
+    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
+    team_str = teams[0] if len(teams) == 1 else "Summary"
+    account_team_str = f"{acc_str} - {team_str}"
+    
+    class ReportPDF(FPDF):
+        def footer(self):
+            self.set_y(-12)
+            self.set_draw_color(234, 88, 12)
+            self.set_line_width(0.5)
+            self.line(15, 286, 195, 286)
+            self.set_text_color(100, 116, 139)
+            self.set_font("Arial", "B", 8)
+            self.cell(90, 5, safe_pdf_text(f"Factspan • {account_team_str}"), align="L")
+            self.set_font("Arial", "", 8)
+            self.cell(90, 5, f"Page {self.page_no()}", align="R")
+
+    pdf = ReportPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=17)
+    pdf.add_page()
+    pdf.set_fill_color(30, 41, 59)
+    pdf.rect(0, 0, 210, 44, "F")
+    pdf.set_text_color(234, 88, 12)
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_xy(15, 9)
+    pdf.cell(170, 4, safe_pdf_text("WEEKLY PROJECT REPORT"), ln=True)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Arial", "B", 22)
+    pdf.set_xy(15, 15)
+    pdf.cell(170, 9, safe_pdf_text(account_team_str), ln=True)
+    pdf.set_text_color(203, 213, 225)
+    pdf.set_font("Arial", "", 9.5)
+    pdf.set_xy(15, 26)
+    pdf.cell(170, 5, safe_pdf_text(header_title), ln=True)
+    pdf.set_font("Arial", "", 7.5)
+    pdf.set_xy(15, 34)
+    pdf.cell(170, 4, safe_pdf_text(f"Generated: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}"), ln=True)
+
+    total_projects = len(dataframe)
+    total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
+    delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
+    avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
+    avg_util = resource_utilization(dataframe) if not dataframe.empty and "Resource" in dataframe.columns else 0
+    risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
+
+    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
+    box_w = 34.5; gap = 2.7; y = 50
+    for i, (label, value) in enumerate(kpis):
+        x = 15 + i * (box_w + gap)
+        pdf.set_fill_color(248, 250, 252); pdf.set_draw_color(226, 232, 240)
+        pdf.rect(x, y, box_w, 24, "DF")
+        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "B", 6.8); pdf.set_xy(x + 2, y + 4)
+        pdf.cell(box_w - 4, 4, safe_pdf_text(label), align="C")
+        pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 15); pdf.set_xy(x + 2, y + 10)
+        pdf.cell(box_w - 4, 8, safe_pdf_text(value), align="C")
+    pdf.set_y(82)
+
+    def section(title):
+        pdf.ln(5); y0 = pdf.get_y()
+        pdf.set_fill_color(234, 88, 12)
+        pdf.rect(15, y0 + 1, 2.5, 7, "F")
+        pdf.set_xy(21, y0); pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 13)
+        pdf.cell(170, 8, safe_pdf_text(title), ln=True); pdf.ln(1)
+
+    section("Executive Summary")
+    pdf.set_text_color(71, 85, 105); pdf.set_font("Arial", "", 9.5)
+    summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
+               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {avg_util}%. "
+               f"There are {risks} item(s) requiring risk or blocker attention.")
+    pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
+
+    section("Project Status")
+    headers = [("Project", 60), ("Resource", 28), ("Status", 28), ("Comp.", 17), ("Util.", 17), ("Expected", 30)]
+    pdf.set_fill_color(241, 245, 249); pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 7.8)
+    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True)
+    pdf.ln(); pdf.set_font("Arial", "", 8.2)
+    for ridx, (_, row) in enumerate(dataframe.iterrows()):
+        if ridx % 2 == 1: pdf.set_fill_color(248, 250, 252)
+        else: pdf.set_fill_color(255, 255, 255)
+        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]; resource = safe_pdf_text(row.get("Resource", "N/A"))[:17]
+        status = safe_pdf_text(row.get("Status", "N/A"))[:15]; comp = safe_pdf_text(row.get("Completion %", "N/A"))
+        util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
+        pdf.set_text_color(71, 85, 105); pdf.cell(60, 8, project, border=1, fill=True); pdf.cell(28, 8, resource, border=1, fill=True)
+        if status in ("At Risk", "Blocked"): pdf.set_text_color(220, 38, 38)
+        elif status == "Completed": pdf.set_text_color(22, 163, 74)
+        pdf.cell(28, 8, status, border=1, fill=True); pdf.set_text_color(71, 85, 105)
+        pdf.cell(17, 8, comp, border=1, fill=True, align="C"); pdf.cell(17, 8, util, border=1, fill=True, align="C")
+        pdf.cell(30, 8, expected, border=1, fill=True); pdf.ln()
+
+    section("Weekly Highlights")
+    for _, row in dataframe.iterrows():
+        project = safe_pdf_text(row.get("Project / Dashboard", "N/A")); delivered_text = safe_pdf_text(row.get("This Week Delivered", "None reported."))
+        pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, project)
+        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, f"Delivered: {delivered_text or 'None reported.'}"); pdf.ln(1.5)
+
+    risk_df = dataframe[(dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")]
+    section("Risks & Blockers")
+    if risk_df.empty:
+        pdf.set_text_color(22, 163, 74); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 6, safe_pdf_text("No active blockers or risks reported for this period."))
+    else:
+        for _, row in risk_df.iterrows():
+            pdf.set_text_color(220, 38, 38); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, safe_pdf_text(row.get("Project / Dashboard", "N/A")))
+            pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "", 9)
+            blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
+            pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
+
+    pdf.add_page()
+    section("Management Actions & Health")
+    pdf.set_text_color(71, 85, 105); pdf.set_font("Arial", "", 9)
+    for _, row in dataframe.iterrows():
+        hs=health_score(row); priority,_=classify_attention(row)
+        if priority != "Normal" or hs < 80:
+            text=f"{safe_pdf_text(row.get('Project / Dashboard','N/A'))} | Health {hs}/100 | {priority} | Action: {safe_pdf_text(suggested_action(row))}"
+            pdf.multi_cell(180,5,text); pdf.ln(1)
+    section("Delivery Outlook")
+    pdf.set_font("Arial", "", 9)
+    counts=Counter(delivery_bucket(r) for _,r in dataframe.iterrows())
+    pdf.multi_cell(180,5,safe_pdf_text("Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (counts.get("Overdue",0),counts.get("Next 7 Days",0),counts.get("8–14 Days",0),counts.get("15+ Days",0),counts.get("Delivered",0))))
+
+    try: output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
+    except Exception: return bytes(pdf.output())
+
+def create_excel_report(dataframe, report_title):
+    buffer = io.BytesIO()
+    wb = Workbook() if OPENPYXL_AVAILABLE else None
+    if wb is None:
+        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: dataframe.to_excel(writer, index=False, sheet_name="Weekly Notes")
+        return buffer.getvalue()
+
+    accounts = list(dataframe["Account"].dropna().unique()) if "Account" in dataframe else []
+    teams = list(dataframe["Team"].dropna().unique()) if "Team" in dataframe else []
+    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
+    team_str = teams[0] if len(teams) == 1 else "Summary"
+    account_team_str = f"{acc_str} - {team_str}"
+    date_str = report_title.split(": ")[-1] if ": " in report_title else report_title
+
+    ws = wb.active; ws.title = "Weekly Notes"
+    cols = ["Resource", "Business Owner", "Project / Dashboard", "Start date", "Initial Delivery date", "Updated Expected Delivery date", "Work Type", "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", "Status", "Blocker"]
+    
+    ws["A1"] = date_str; ws["A1"].fill = PatternFill("solid", fgColor="EA580C"); ws["A1"].font = Font(bold=True, color="FFFFFF"); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws["B1"] = f"{account_team_str} ({date_str})"; ws["B1"].fill = PatternFill("solid", fgColor="1E293B"); ws["B1"].font = Font(bold=True, color="FFFFFF"); ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=len(cols)); ws.row_dimensions[1].height = 25
+    
+    header_fill = PatternFill("solid", fgColor="EA580C"); header_font = Font(bold=True, color="FFFFFF"); thin_border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+    for c_idx, col_name in enumerate(cols, 1):
+        cell = ws.cell(row=2, column=c_idx, value=col_name); cell.fill = header_fill; cell.font = header_font; cell.border = thin_border; cell.alignment = Alignment(horizontal="center", vertical="bottom", wrap_text=True)
+    ws.row_dimensions[2].height = 35
+    
+    resource_fill = PatternFill("solid", fgColor="F8FAFC"); owner_fill = PatternFill("solid", fgColor="F1F5F9")
+    for r_idx, row in enumerate(dataframe.to_dict('records'), 3):
+        for c_idx, col_name in enumerate(cols, 1):
+            val = row.get(col_name, ""); cell = ws.cell(row=r_idx, column=c_idx, value=val); cell.border = thin_border; cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if col_name == "Resource": cell.fill = resource_fill; cell.font = Font(bold=True, color="1E293B")
+            elif col_name == "Business Owner": cell.fill = owner_fill; cell.font = Font(bold=True, color="1E293B")
+            elif col_name == "Status": cell.font = Font(bold=True)
+    widths = {"A": 16, "B": 14, "C": 30, "D": 11, "E": 11, "F": 13, "G": 22, "H": 38, "I": 35, "J": 12, "K": 12, "L": 14, "M": 38}
+    for col_letter, width in widths.items(): ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A3"; ws.auto_filter.ref = f"A2:M{max(2,len(dataframe)+2)}"
+
+    ex = wb.create_sheet("Executive Summary")
+    score, counts = portfolio_health(dataframe)
+    avg_completion = int(round(sum(pct_value(x) for x in dataframe["Completion %"])/max(1,len(dataframe)))) if not dataframe.empty else 0
+    metrics=[("Report Period",current_period_label(dataframe)),("Projects",len(dataframe)),("Resources",dataframe["Resource"].nunique() if not dataframe.empty else 0),("Avg Completion",f"{avg_completion}%"),("Avg Utilization",f"{resource_utilization(dataframe)}%"),("Portfolio Health",f"{score}/100"),("Healthy",counts.get("Healthy",0)),("Attention",counts.get("Attention",0)),("Critical",counts.get("Critical",0))]
+    ex.append(["Executive Summary",""]); ex.merge_cells("A1:B1"); ex["A1"].font=Font(size=16,bold=True,color="FFFFFF"); ex["A1"].fill=PatternFill("solid",fgColor="1E293B")
+    for k,v in metrics: ex.append([k,v])
+    for cell in ex["A"]: cell.font=Font(bold=True)
+    ex.column_dimensions["A"].width=25; ex.column_dimensions["B"].width=35; ex.freeze_panes="A2"
+
+    ra = wb.create_sheet("Risks & Actions")
+    action_items=build_action_items(dataframe); ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
+    for item in action_items: ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
+
+    wow = wb.create_sheet("Week-over-Week")
+    yrs=list(dataframe["Year"].unique()) if not dataframe.empty else []; mos=list(dataframe["Month"].unique()) if not dataframe.empty else []; wks=list(dataframe["Week"].unique()) if not dataframe.empty else []
+    mv=compare_current_to_prior(dataframe,get_latest_prior_week(dataframe,yrs[0],mos[0],wks[0])) if len(yrs)==len(mos)==len(wks)==1 else pd.DataFrame()
+    if mv.empty: wow.append(["Select exactly one Year, Month and Week in the app to populate week-over-week movement."])
+    else:
+        wow.append(list(mv.columns)); [wow.append(list(r)) for r in mv.itertuples(index=False,name=None)]
+
+    dq=wb.create_sheet("Data Quality")
+    dq.append(["Project / Dashboard","Resource","Status","Issues"])
+    for _,r in dataframe.iterrows():
+        flags=data_quality_flags(r)
+        if flags: dq.append([r.get("Project / Dashboard",""),r.get("Resource",""),r.get("Status",""),"; ".join(flags)])
+
+    for sh in [ex,ra,wow,dq]:
+        for cell in sh[1]: cell.font=Font(bold=True, color="FFFFFF"); cell.fill=PatternFill("solid",fgColor="EA580C"); cell.alignment=Alignment(wrap_text=True)
+        for col in range(1, sh.max_column+1): sh.column_dimensions[get_column_letter(col)].width=min(45,max(14,sh.column_dimensions[get_column_letter(col)].width or 14))
+        sh.freeze_panes="A2"
+    wb.save(buffer); return buffer.getvalue()
 
 def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, dataframe=None):
     recipients = [x.strip() for x in recipients if x.strip()]; cc_recipients = [x.strip() for x in (cc_recipients or []) if x.strip()]

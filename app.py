@@ -15,8 +15,8 @@ from collections import Counter
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- Update this URL if you host the image_c5eb01.png elsewhere ---
-LOGO_URL = "https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png"
+# --- Email Logo Fallback URL ---
+EMAIL_LOGO_URL = "https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png"
 
 # Optional PDF dependency
 try:
@@ -499,6 +499,14 @@ if st.session_state.notes_db:
 # =========================================================
 # HELPERS
 # =========================================================
+def current_period_label(df):
+    if df.empty: return "Current selection"
+    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
+    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
+    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
+    if len(years)==1 and len(months)==1 and len(weeks)==1: return f"{months[0]} {years[0]} · {weeks[0]}"
+    return "Current selection"
+
 def html_escape(value):
     return html.escape("" if value is None else str(value))
 
@@ -530,14 +538,6 @@ def parse_date(date_str):
     try: return datetime.strptime(str(date_str), "%Y-%m-%d").date()
     except Exception: return None
     
-def current_period_label(df):
-    if df.empty: return "Current selection"
-    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
-    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
-    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
-    if len(years)==1 and len(months)==1 and len(weeks)==1: return f"{months[0]} {years[0]} · {weeks[0]}"
-    return "Current selection"
-
 def pct_value(value):
     try: return max(0.0, min(100.0, float(str(value).replace("%", "").strip())))
     except Exception: return 0.0
@@ -801,7 +801,7 @@ def generate_html_email_body(df, report_title):
                 <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
             </td>
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{res}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; width: 25%;">
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">
                 <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}% Completed</div>
                 <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
                     <div style="background-color: #ea580c; width: {comp}%; height: 100%;"></div>
@@ -821,11 +821,11 @@ def generate_html_email_body(df, report_title):
             highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item['Project / Dashboard'])}:</strong> {html_escape(item['Reason'])}. <em>Action: {html_escape(item['Recommended Action'])}</em></li>"""
     else:
         recent_updates = df[df["This Week Delivered"].astype(str).str.strip() != ""].head(4)
-        for _, row in recent_updates.iterrows():
-            highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row.get('Project / Dashboard', 'N/A'))}:</strong> {html_escape(row.get('This Week Delivered', ''))}</li>"""
-    
-    if not highlights_html:
-        highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
+        if not recent_updates.empty:
+            for _, row in recent_updates.iterrows():
+                highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row.get('Project / Dashboard', 'N/A'))}:</strong> {html_escape(row.get('This Week Delivered', ''))}</li>"""
+        else:
+            highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
 
     html_body = f"""
     <!DOCTYPE html>
@@ -836,12 +836,12 @@ def generate_html_email_body(df, report_title):
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
                 <tr>
                     <td width="35%" valign="middle">
-                        <img src="{LOGO_URL}" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
+                        <img src="{EMAIL_LOGO_URL}" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
                     </td>
                     <td width="65%" align="right" valign="middle">
                         <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
                         <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
-                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot • {date_str}</div>
+                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
                     </td>
                 </tr>
             </table>
@@ -872,14 +872,14 @@ def generate_html_email_body(df, report_title):
                         </td>
                     </tr>
                 </table>
-                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px; table-layout: fixed;">
                     <thead>
                         <tr style="background-color: #1e293b;">
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">PROJECT / OWNER</th>
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">RESOURCE</th>
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">DELIVERY PROGRESS</th>
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">TARGET DATE</th>
-                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">STATUS</th>
+                            <th align="left" width="30%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">PROJECT / OWNER</th>
+                            <th align="left" width="20%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">RESOURCE</th>
+                            <th align="left" width="25%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">DELIVERY PROGRESS</th>
+                            <th align="left" width="15%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">TARGET DATE</th>
+                            <th align="left" width="10%" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">STATUS</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -922,15 +922,17 @@ def create_pdf_report(dataframe, header_title):
     import urllib.request
     import tempfile
     import ssl
-    tmp_logo = None
-    try:
-        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, context=ctx) as response:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-                tmp_file.write(response.read())
-                tmp_logo = tmp_file.name
-    except Exception: pass
+    tmp_logo = "logo.png" if os.path.exists("logo.png") else None
+    
+    if not tmp_logo:
+        try:
+            ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(EMAIL_LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, context=ctx) as response:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+                    tmp_file.write(response.read())
+                    tmp_logo = tmp_file.name
+        except Exception: pass
 
     class ReportPDF(FPDF):
         def header(self):
@@ -945,18 +947,21 @@ def create_pdf_report(dataframe, header_title):
 
             self.set_text_color(234, 88, 12)
             self.set_font("Arial", "B", 8)
-            self.set_xy(100, 10)
-            self.cell(95, 4, "WEEKLY PROJECT REPORT", align="R", ln=True)
+            self.set_xy(15, 10)
+            self.cell(180, 4, "WEEKLY PROJECT REPORT", align="R", ln=True)
             
             self.set_text_color(30, 41, 59)
             self.set_font("Arial", "B", 18)
-            self.set_xy(100, 14)
-            self.cell(95, 8, safe_pdf_text(account_team_str), align="R", ln=True)
+            self.set_x(15)
+            self.cell(180, 8, safe_pdf_text(account_team_str), align="R", ln=True)
             
             self.set_text_color(100, 116, 139)
             self.set_font("Arial", "", 8)
-            self.set_xy(100, 22)
-            self.cell(95, 4, safe_pdf_text(f"Generated: {date_str}"), align="R", ln=True)
+            self.set_x(15)
+            self.cell(180, 4, safe_pdf_text(header_title), align="R", ln=True)
+            
+            self.set_x(15)
+            self.cell(180, 4, safe_pdf_text(f"Generated: {date_str}"), align="R", ln=True)
             
             self.set_y(32)
             self.set_draw_color(234, 88, 12)
@@ -973,7 +978,7 @@ def create_pdf_report(dataframe, header_title):
             self.set_text_color(30, 41, 59)
             self.set_font("Arial", "B", 8)
             self.set_xy(15, 285)
-            self.cell(90, 5, safe_pdf_text(f"Factspan • {account_team_str}"), align="L")
+            self.cell(90, 5, safe_pdf_text(f"Factspan \x95 {account_team_str}"), align="L")
             self.set_text_color(100, 116, 139)
             self.set_font("Arial", "", 8)
             self.set_xy(100, 285)
@@ -1000,7 +1005,7 @@ def create_pdf_report(dataframe, header_title):
         pdf.cell(box_w - 4, 4, safe_pdf_text(label), align="C")
         pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 15); pdf.set_xy(x + 2, y + 10)
         pdf.cell(box_w - 4, 8, safe_pdf_text(str(value)), align="C")
-    pdf.set_y(72)
+    pdf.set_y(70)
 
     def section(title):
         pdf.ln(5); y0 = pdf.get_y(); pdf.set_fill_color(37, 99, 235); pdf.rect(15, y0 + 1, 2.5, 7, "F")
@@ -1015,22 +1020,31 @@ def create_pdf_report(dataframe, header_title):
     pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
 
     section("Project Status")
-    headers = [("Project", 60), ("Resource", 28), ("Status", 28), ("Comp.", 17), ("Util.", 17), ("Expected", 30)]
+    headers = [("Project", 60, "L"), ("Resource", 28, "L"), ("Status", 28, "L"), ("Comp.", 17, "C"), ("Util.", 17, "C"), ("Expected", 30, "L")]
     pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
-    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True)
+    for label, width, al in headers: 
+        pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True, align=al)
     pdf.ln(); pdf.set_font("Arial", "", 8.2)
     for ridx, (_, row) in enumerate(dataframe.iterrows()):
         if ridx % 2 == 1: pdf.set_fill_color(249, 251, 253)
         else: pdf.set_fill_color(255, 255, 255)
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]; resource = safe_pdf_text(row.get("Resource Name", "")) or safe_pdf_text(row.get("Resource", "N/A"))[:17]
+        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]
+        resource = safe_pdf_text(row.get("Resource Name", "")) or safe_pdf_text(row.get("Resource", "N/A"))[:17]
         status = safe_pdf_text(row.get("Status", "N/A"))[:15]; comp = safe_pdf_text(row.get("Completion %", "N/A"))
         util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
-        pdf.set_text_color(52, 64, 84); pdf.cell(60, 8, project, border=1, fill=True); pdf.cell(28, 8, resource[:20], border=1, fill=True)
+        
+        pdf.set_text_color(52, 64, 84)
+        pdf.cell(60, 8, project, border=1, fill=True, align="L")
+        pdf.cell(28, 8, resource[:20], border=1, fill=True, align="L")
+        
         if status in ("At Risk", "Blocked"): pdf.set_text_color(160, 55, 55)
         elif status == "Completed": pdf.set_text_color(22, 128, 91)
-        pdf.cell(28, 8, status, border=1, fill=True); pdf.set_text_color(52, 64, 84)
-        pdf.cell(17, 8, comp, border=1, fill=True, align="C"); pdf.cell(17, 8, util, border=1, fill=True, align="C")
-        pdf.cell(30, 8, expected, border=1, fill=True); pdf.ln()
+        pdf.cell(28, 8, status, border=1, fill=True, align="L"); pdf.set_text_color(52, 64, 84)
+        
+        pdf.cell(17, 8, comp, border=1, fill=True, align="C")
+        pdf.cell(17, 8, util, border=1, fill=True, align="C")
+        pdf.cell(30, 8, expected, border=1, fill=True, align="L")
+        pdf.ln()
 
     section("Weekly Highlights")
     for _, row in dataframe.iterrows():
@@ -1064,7 +1078,7 @@ def create_pdf_report(dataframe, header_title):
     pdf.multi_cell(180,5,safe_pdf_text("Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (counts.get("Overdue",0),counts.get("Next 7 Days",0),counts.get("8–14 Days",0),counts.get("15+ Days",0),counts.get("Delivered",0))))
 
     try: 
-        if tmp_logo and os.path.exists(tmp_logo): os.remove(tmp_logo)
+        if tmp_logo and tmp_logo != "logo.png" and os.path.exists(tmp_logo): os.remove(tmp_logo)
         output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
     except Exception: return bytes(pdf.output())
 
@@ -1085,11 +1099,11 @@ def create_excel_report(dataframe, report_title):
     ws = wb.active; ws.title = "Weekly Notes"
     cols = ["Resource", "Business Owner", "Project / Dashboard", "Start date", "Initial Delivery date", "Updated Expected Delivery date", "Work Type", "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", "Status", "Blocker"]
     
-    ws["A1"] = date_str; ws["A1"].fill = PatternFill("solid", fgColor="FFD966"); ws["A1"].font = Font(bold=True); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws["A1"] = date_str; ws["A1"].fill = PatternFill("solid", fgColor="FFD966"); ws["A1"].font = Font(bold=True, color="000000"); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws["B1"] = f"{account_team_str} ({date_str})"; ws["B1"].fill = PatternFill("solid", fgColor="004B87"); ws["B1"].font = Font(bold=True, color="FFFFFF"); ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=len(cols)); ws.row_dimensions[1].height = 25
     
-    header_fill = PatternFill("solid", fgColor="DDEBF7"); header_font = Font(bold=True); thin_border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+    header_fill = PatternFill("solid", fgColor="DDEBF7"); header_font = Font(bold=True, color="000000"); thin_border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
     for c_idx, col_name in enumerate(cols, 1):
         cell = ws.cell(row=2, column=c_idx, value=col_name); cell.fill = header_fill; cell.font = header_font; cell.border = thin_border; cell.alignment = Alignment(horizontal="center", vertical="bottom", wrap_text=True)
     ws.row_dimensions[2].height = 35
@@ -1132,10 +1146,40 @@ def create_excel_report(dataframe, report_title):
         if flags: dq.append([r.get("Project / Dashboard",""),r.get("Resource",""),r.get("Status",""),"; ".join(flags)])
 
     for sh in [ex,ra,wow,dq]:
-        for cell in sh[1]: cell.font=Font(bold=True); cell.fill=PatternFill("solid",fgColor="DDEBF7"); cell.alignment=Alignment(wrap_text=True)
+        for cell in sh[1]: cell.font=Font(bold=True, color="000000"); cell.fill=PatternFill("solid",fgColor="DDEBF7"); cell.alignment=Alignment(wrap_text=True)
         for col in range(1, sh.max_column+1): sh.column_dimensions[get_column_letter(col)].width=min(45,max(14,sh.column_dimensions[get_column_letter(col)].width or 14))
         sh.freeze_panes="A2"
     wb.save(buffer); return buffer.getvalue()
+
+def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, dataframe=None):
+    recipients = [x.strip() for x in recipients if x.strip()]; cc_recipients = [x.strip() for x in (cc_recipients or []) if x.strip()]
+    if not recipients: return False, "Please enter at least one recipient email address."
+    cfg = st.secrets if hasattr(st, "secrets") else {}; host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", "")); port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587"))); username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", "")); password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", "")); sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username)); use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+    if not host or not sender: return False, "Email sending is not configured (SMTP secrets missing)."
+    
+    msg = EmailMessage()
+    msg["Subject"] = report_title
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    if cc_recipients: msg["Cc"] = ", ".join(cc_recipients)
+    
+    if dataframe is not None and not dataframe.empty:
+        html_content = generate_html_email_body(dataframe, report_title)
+        msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
+        msg.add_alternative(html_content, subtype='html')
+    else:
+        msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
+        
+    if pdf_bytes:
+        msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
+        
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            if use_tls: server.starttls()
+            if username and password: server.login(username, password)
+            server.send_message(msg)
+        return True, f"Report sent successfully to {', '.join(recipients)}."
+    except Exception as exc: return False, f"Unable to send report: {exc}"
 
 # =========================================================
 # DATA + GLOBAL TOP AREA

@@ -15,6 +15,9 @@ from collections import Counter
 import gspread
 from google.oauth2.service_account import Credentials
 
+# --- Replace this with your specific logo link if needed ---
+LOGO_URL = "https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png"
+
 # Optional PDF dependency
 try:
     from fpdf import FPDF
@@ -116,7 +119,7 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state.authenticated:
     st.markdown('<div style="max-width: 480px; margin: 60px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
-    st.markdown("<h2 style='color: #16324f; text-align:center; margin-bottom: 5px;'>🔒 Project Portal</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='color: #1e293b; text-align:center; margin-bottom: 5px;'>🔒 Project Portal</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in or create an account to continue.</p>", unsafe_allow_html=True)
     
     tab1, tab2, tab3 = st.tabs(["🔐 Log In", "📝 Create Account", "🔑 Forgot Password"])
@@ -345,6 +348,7 @@ if not st.session_state.authenticated:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
+
 def load_data_from_gsheets():
     try:
         client = get_gspread_client()
@@ -525,6 +529,14 @@ def parse_date(date_str):
     if not date_str or str(date_str).strip() in ["N/A", "None", ""]: return None
     try: return datetime.strptime(str(date_str), "%Y-%m-%d").date()
     except Exception: return None
+    
+def current_period_label(df):
+    if df.empty: return "Current selection"
+    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
+    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
+    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
+    if len(years)==1 and len(months)==1 and len(weeks)==1: return f"{months[0]} {years[0]} · {weeks[0]}"
+    return "Current selection"
 
 def pct_value(value):
     try: return max(0.0, min(100.0, float(str(value).replace("%", "").strip())))
@@ -824,7 +836,7 @@ def generate_html_email_body(df, report_title):
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
                 <tr>
                     <td width="35%" valign="middle">
-                        <img src="https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
+                        <img src="{LOGO_URL}" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
                     </td>
                     <td width="65%" align="right" valign="middle">
                         <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
@@ -905,122 +917,197 @@ def create_pdf_report(dataframe, header_title):
     acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
     team_str = teams[0] if len(teams) == 1 else "Summary"
     account_team_str = f"{acc_str} - {team_str}"
+    date_str = datetime.now(IST).strftime("%d %b %Y")
     
+    import urllib.request
+    import tempfile
+    import ssl
+    tmp_logo = None
+    try:
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=ctx) as response:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+                tmp_file.write(response.read())
+                tmp_logo = tmp_file.name
+    except Exception: pass
+
     class ReportPDF(FPDF):
-        def footer(self):
-            self.set_y(-12)
-            self.set_draw_color(234, 88, 12)
-            self.set_line_width(0.5)
-            self.line(15, 286, 195, 286)
-            self.set_text_color(100, 116, 139)
+        def header(self):
+            if tmp_logo:
+                try: self.image(tmp_logo, 15, 10, 40)
+                except Exception:
+                    self.set_text_color(30, 41, 59); self.set_font("Arial", "B", 16)
+                    self.set_xy(15, 15); self.cell(40, 10, "FACTSPAN", ln=False)
+            else:
+                self.set_text_color(30, 41, 59); self.set_font("Arial", "B", 16)
+                self.set_xy(15, 15); self.cell(40, 10, "FACTSPAN", ln=False)
+
+            self.set_text_color(234, 88, 12)
             self.set_font("Arial", "B", 8)
-            self.cell(90, 5, safe_pdf_text(f"Factspan • {account_team_str}"), align="L")
+            self.set_xy(100, 10)
+            self.cell(95, 4, "WEEKLY PROJECT REPORT", align="R", ln=True)
+            
+            self.set_text_color(30, 41, 59)
+            self.set_font("Arial", "B", 18)
+            self.set_xy(100, 14)
+            self.cell(95, 8, safe_pdf_text(account_team_str), align="R", ln=True)
+            
+            self.set_text_color(100, 116, 139)
             self.set_font("Arial", "", 8)
-            self.cell(90, 5, f"Page {self.page_no()}", align="R")
+            self.set_xy(100, 22)
+            self.cell(95, 4, safe_pdf_text(f"Weekly Progress Snapshot • {date_str}"), align="R", ln=True)
+            
+            self.set_y(32)
+            self.set_draw_color(234, 88, 12)
+            self.set_line_width(1)
+            self.line(15, 32, 195, 32)
+            self.set_line_width(0.2)
+            self.ln(10)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_draw_color(30, 41, 59)
+            self.set_fill_color(30, 41, 59)
+            self.rect(0, 282, 210, 15, "F")
+            self.set_text_color(241, 245, 249)
+            self.set_font("Arial", "", 8)
+            self.set_xy(15, 285)
+            self.cell(90, 5, safe_pdf_text(f"Factspan • {account_team_str}"), align="L")
+            self.set_text_color(234, 88, 12)
+            self.set_font("Arial", "B", 8)
+            self.set_xy(100, 285)
+            self.cell(95, 5, safe_pdf_text("Staying Relevant and Ahead through Fluid Intelligence"), align="R")
 
     pdf = ReportPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=17)
+    pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
-    pdf.set_fill_color(30, 41, 59)
-    pdf.rect(0, 0, 210, 44, "F")
-    pdf.set_text_color(234, 88, 12)
-    pdf.set_font("Arial", "B", 9)
-    pdf.set_xy(15, 9)
-    pdf.cell(170, 4, safe_pdf_text("WEEKLY PROJECT REPORT"), ln=True)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Arial", "B", 22)
-    pdf.set_xy(15, 15)
-    pdf.cell(170, 9, safe_pdf_text(account_team_str), ln=True)
-    pdf.set_text_color(203, 213, 225)
-    pdf.set_font("Arial", "", 9.5)
-    pdf.set_xy(15, 26)
-    pdf.cell(170, 5, safe_pdf_text(header_title), ln=True)
-    pdf.set_font("Arial", "", 7.5)
-    pdf.set_xy(15, 34)
-    pdf.cell(170, 4, safe_pdf_text(f"Generated: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}"), ln=True)
 
     total_projects = len(dataframe)
-    total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
     delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
     avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
-    avg_util = resource_utilization(dataframe) if not dataframe.empty and "Resource" in dataframe.columns else 0
     risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
 
-    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
-    box_w = 34.5; gap = 2.7; y = 50
-    for i, (label, value) in enumerate(kpis):
+    pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 13)
+    pdf.cell(180, 8, "Portfolio Snapshot", ln=True)
+    pdf.set_draw_color(234, 88, 12); pdf.set_line_width(0.5); pdf.line(15, pdf.get_y(), 60, pdf.get_y()); pdf.set_line_width(0.2)
+    pdf.ln(4)
+
+    kpis = [("PROJECTS", total_projects, 30, 41, 59), ("UPDATES", delivered, 22, 163, 74), ("COMPLETION", f"{avg_comp}%", 234, 88, 12), ("RISKS", risks, 220, 38, 38)]
+    box_w = 42; gap = 4; y = pdf.get_y()
+    for i, (label, value, r, g, b) in enumerate(kpis):
         x = 15 + i * (box_w + gap)
         pdf.set_fill_color(248, 250, 252); pdf.set_draw_color(226, 232, 240)
         pdf.rect(x, y, box_w, 24, "DF")
-        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "B", 6.8); pdf.set_xy(x + 2, y + 4)
-        pdf.cell(box_w - 4, 4, safe_pdf_text(label), align="C")
-        pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 15); pdf.set_xy(x + 2, y + 10)
-        pdf.cell(box_w - 4, 8, safe_pdf_text(value), align="C")
-    pdf.set_y(82)
+        pdf.set_text_color(r, g, b); pdf.set_font("Arial", "B", 18); pdf.set_xy(x, y + 5)
+        pdf.cell(box_w, 8, safe_pdf_text(str(value)), align="C")
+        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "B", 7); pdf.set_xy(x, y + 14)
+        pdf.cell(box_w, 4, safe_pdf_text(label), align="C")
+    pdf.set_y(y + 32)
 
-    def section(title):
-        pdf.ln(5); y0 = pdf.get_y()
-        pdf.set_fill_color(234, 88, 12)
-        pdf.rect(15, y0 + 1, 2.5, 7, "F")
-        pdf.set_xy(21, y0); pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 13)
-        pdf.cell(170, 8, safe_pdf_text(title), ln=True); pdf.ln(1)
+    pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 11)
+    pdf.cell(180, 8, "Key Updates & Actions", ln=True)
+    pdf.set_fill_color(255, 247, 237); pdf.set_draw_color(234, 88, 12)
+    y0 = pdf.get_y(); pdf.rect(15, y0, 180, 25, "DF") 
+    pdf.set_xy(18, y0 + 3)
+    action_items = build_action_items(dataframe)
+    critical_items = [x for x in action_items if x["Priority"] == "Critical"]
+    pdf.set_text_color(71, 85, 105); pdf.set_font("Arial", "", 9)
+    if critical_items:
+        for item in critical_items[:4]:
+            pdf.set_font("Arial", "B", 9)
+            pdf.write(5, safe_pdf_text(f"• {item['Project / Dashboard']}: "))
+            pdf.set_font("Arial", "", 9)
+            pdf.write(5, safe_pdf_text(f"{item['Reason']}. Action: {item['Recommended Action']}\n"))
+    else:
+        recent_updates = dataframe[dataframe["This Week Delivered"].astype(str).str.strip() != ""].head(4)
+        if not recent_updates.empty:
+            for _, row in recent_updates.iterrows():
+                pdf.set_font("Arial", "B", 9)
+                pdf.write(5, safe_pdf_text(f"• {row.get('Project / Dashboard', 'N/A')}: "))
+                pdf.set_font("Arial", "", 9)
+                pdf.write(5, safe_pdf_text(f"{row.get('This Week Delivered', '')}\n"))
+        else:
+            pdf.write(5, "Routine progress tracking across all initiatives. No critical blocks reported.\n")
+    
+    y_after_box = pdf.get_y() + 3
+    pdf.set_fill_color(255, 247, 237); pdf.set_draw_color(253, 186, 116)
+    pdf.rect(15, y0, 180, y_after_box - y0, "DF")
+    pdf.set_fill_color(234, 88, 12)
+    pdf.rect(15, y0, 2, y_after_box - y0, "F")
+    pdf.set_xy(20, y0 + 3)
+    pdf.set_text_color(71, 85, 105); pdf.set_font("Arial", "", 9)
+    if critical_items:
+        for item in critical_items[:4]:
+            pdf.set_font("Arial", "B", 9)
+            pdf.write(5, safe_pdf_text(f"• {item['Project / Dashboard']}: "))
+            pdf.set_font("Arial", "", 9)
+            pdf.write(5, safe_pdf_text(f"{item['Reason']}. Action: {item['Recommended Action']}\n"))
+    else:
+        recent_updates = dataframe[dataframe["This Week Delivered"].astype(str).str.strip() != ""].head(4)
+        if not recent_updates.empty:
+            for _, row in recent_updates.iterrows():
+                pdf.set_font("Arial", "B", 9)
+                pdf.write(5, safe_pdf_text(f"• {row.get('Project / Dashboard', 'N/A')}: "))
+                pdf.set_font("Arial", "", 9)
+                pdf.write(5, safe_pdf_text(f"{row.get('This Week Delivered', '')}\n"))
+        else:
+            pdf.write(5, "Routine progress tracking across all initiatives. No critical blocks reported.\n")
 
-    section("Executive Summary")
-    pdf.set_text_color(71, 85, 105); pdf.set_font("Arial", "", 9.5)
-    summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
-               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {avg_util}%. "
-               f"There are {risks} item(s) requiring risk or blocker attention.")
-    pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
+    pdf.set_y(pdf.get_y() + 8)
 
-    section("Project Status")
-    headers = [("Project", 60), ("Resource", 28), ("Status", 28), ("Comp.", 17), ("Util.", 17), ("Expected", 30)]
-    pdf.set_fill_color(241, 245, 249); pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 7.8)
-    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True)
-    pdf.ln(); pdf.set_font("Arial", "", 8.2)
+    headers = [("PROJECT / OWNER", 60), ("RESOURCE", 30), ("DELIVERY PROGRESS", 40), ("TARGET DATE", 25), ("STATUS", 25)]
+    pdf.set_fill_color(30, 41, 59); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 8)
+    for label, width in headers: pdf.cell(width, 8, safe_pdf_text(label), border=0, fill=True)
+    pdf.ln()
+    
+    pdf.set_font("Arial", "", 8)
     for ridx, (_, row) in enumerate(dataframe.iterrows()):
         if ridx % 2 == 1: pdf.set_fill_color(248, 250, 252)
         else: pdf.set_fill_color(255, 255, 255)
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]; resource = safe_pdf_text(row.get("Resource", "N/A"))[:17]
-        status = safe_pdf_text(row.get("Status", "N/A"))[:15]; comp = safe_pdf_text(row.get("Completion %", "N/A"))
-        util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
-        pdf.set_text_color(71, 85, 105); pdf.cell(60, 8, project, border=1, fill=True); pdf.cell(28, 8, resource, border=1, fill=True)
-        if status in ("At Risk", "Blocked"): pdf.set_text_color(220, 38, 38)
-        elif status == "Completed": pdf.set_text_color(22, 163, 74)
-        pdf.cell(28, 8, status, border=1, fill=True); pdf.set_text_color(71, 85, 105)
-        pdf.cell(17, 8, comp, border=1, fill=True, align="C"); pdf.cell(17, 8, util, border=1, fill=True, align="C")
-        pdf.cell(30, 8, expected, border=1, fill=True); pdf.ln()
+        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]
+        owner = safe_pdf_text(row.get("Business Owner", "N/A"))[:20]
+        resource = safe_pdf_text(row.get("Resource Name", "")) or safe_pdf_text(row.get("Resource", "N/A"))
+        status = safe_pdf_text(row.get("Status", "N/A"))[:15]
+        comp = safe_pdf_text(str(int(pct_value(row.get("Completion %", "0")))) + "% Completed")
+        expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
+        
+        y_start = pdf.get_y()
+        pdf.set_text_color(30, 41, 59)
+        pdf.cell(60, 10, "", border="B", fill=True)
+        pdf.set_xy(15, y_start + 1)
+        pdf.set_font("Arial", "B", 8); pdf.cell(60, 4, project, ln=True)
+        pdf.set_xy(15, y_start + 5)
+        pdf.set_font("Arial", "", 7); pdf.set_text_color(100, 116, 139); pdf.cell(60, 4, f"Owner: {owner}")
+        
+        pdf.set_xy(75, y_start)
+        pdf.set_font("Arial", "", 8); pdf.set_text_color(71, 85, 105)
+        pdf.cell(30, 10, resource[:20], border="B", fill=True)
+        
+        pdf.cell(40, 10, "", border="B", fill=True)
+        pdf.set_xy(105, y_start + 2)
+        pdf.set_font("Arial", "B", 7); pdf.set_text_color(30, 41, 59); pdf.cell(40, 4, comp)
+        pdf.set_xy(105, y_start + 6)
+        pdf.set_fill_color(226, 232, 240); pdf.rect(105, y_start + 6, 35, 2, "F")
+        comp_val = pct_value(row.get("Completion %", "0"))
+        pdf.set_fill_color(234, 88, 12); pdf.rect(105, y_start + 6, 35 * (comp_val/100), 2, "F")
+        
+        pdf.set_xy(145, y_start)
+        if ridx % 2 == 1: pdf.set_fill_color(248, 250, 252)
+        else: pdf.set_fill_color(255, 255, 255)
+        pdf.set_font("Arial", "", 8); pdf.set_text_color(71, 85, 105)
+        pdf.cell(25, 10, expected, border="B", fill=True)
+        
+        if "Risk" in status or "Blocked" in status: pdf.set_text_color(220, 38, 38)
+        elif "Completed" in status: pdf.set_text_color(22, 163, 74)
+        else: pdf.set_text_color(100, 116, 139)
+        pdf.set_font("Arial", "B", 8)
+        pdf.cell(25, 10, status, border="B", fill=True)
+        pdf.ln()
 
-    section("Weekly Highlights")
-    for _, row in dataframe.iterrows():
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A")); delivered_text = safe_pdf_text(row.get("This Week Delivered", "None reported."))
-        pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, project)
-        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, f"Delivered: {delivered_text or 'None reported.'}"); pdf.ln(1.5)
-
-    risk_df = dataframe[(dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")]
-    section("Risks & Blockers")
-    if risk_df.empty:
-        pdf.set_text_color(22, 163, 74); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 6, safe_pdf_text("No active blockers or risks reported for this period."))
-    else:
-        for _, row in risk_df.iterrows():
-            pdf.set_text_color(220, 38, 38); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, safe_pdf_text(row.get("Project / Dashboard", "N/A")))
-            pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "", 9)
-            blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
-            pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
-
-    pdf.add_page()
-    section("Management Actions & Health")
-    pdf.set_text_color(71, 85, 105); pdf.set_font("Arial", "", 9)
-    for _, row in dataframe.iterrows():
-        hs=health_score(row); priority,_=classify_attention(row)
-        if priority != "Normal" or hs < 80:
-            text=f"{safe_pdf_text(row.get('Project / Dashboard','N/A'))} | Health {hs}/100 | {priority} | Action: {safe_pdf_text(suggested_action(row))}"
-            pdf.multi_cell(180,5,text); pdf.ln(1)
-    section("Delivery Outlook")
-    pdf.set_font("Arial", "", 9)
-    counts=Counter(delivery_bucket(r) for _,r in dataframe.iterrows())
-    pdf.multi_cell(180,5,safe_pdf_text("Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (counts.get("Overdue",0),counts.get("Next 7 Days",0),counts.get("8–14 Days",0),counts.get("15+ Days",0),counts.get("Delivered",0))))
-
-    try: output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
+    try: 
+        if tmp_logo and os.path.exists(tmp_logo): os.remove(tmp_logo)
+        output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
     except Exception: return bytes(pdf.output())
 
 def create_excel_report(dataframe, report_title):

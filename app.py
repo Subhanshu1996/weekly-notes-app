@@ -346,7 +346,6 @@ if not st.session_state.authenticated:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-
 def load_data_from_gsheets():
     try:
         client = get_gspread_client()
@@ -1027,15 +1026,159 @@ def create_excel_report(dataframe, report_title):
         sh.freeze_panes="A2"
     wb.save(buffer); return buffer.getvalue()
 
-def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None):
+def generate_html_email_body(df, report_title):
+    total_projects = len(df)
+    delivered = int((df["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum())
+    avg_comp = int(df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not df.empty else 0
+    risks = int(((df["Status"].isin(["At Risk", "Blocked"])) | (df["Blocker"].fillna("").astype(str).str.strip() != "")).sum())
+    date_str = datetime.now(IST).strftime("%d %b %Y")
+
+    table_rows = ""
+    for _, row in df.iterrows():
+        proj = html_escape(row.get("Project / Dashboard", ""))
+        owner = html_escape(row.get("Business Owner", ""))
+        res = html_escape(row.get("Resource Name", "")) or html_escape(row.get("Resource", ""))
+        status = html_escape(row.get("Status", "On Track"))
+        comp = int(pct_value(row.get("Completion %")))
+        due = html_escape(row.get("Updated Expected Delivery date", "N/A"))
+        status_color = "#16a34a" if status == "Completed" else ("#dc2626" if status in ["At Risk", "Blocked"] else "#64748b")
+
+        table_rows += f"""
+        <tr>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b;">
+                <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
+            </td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{res}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; width: 25%;">
+                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}% Completed</div>
+                <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
+                    <div style="background-color: #ea580c; width: {comp}%; height: 100%;"></div>
+                </div>
+            </td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
+        </tr>
+        """
+
+    highlights_html = ""
+    action_items = build_action_items(df)
+    critical_items = [x for x in action_items if x["Priority"] == "Critical"]
+    
+    if critical_items:
+        for item in critical_items[:3]:
+            highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item['Project / Dashboard'])}:</strong> {html_escape(item['Reason'])}. <em>Action: {html_escape(item['Recommended Action'])}</em></li>"""
+    else:
+        recent_updates = df[df["This Week Delivered"].str.strip() != ""].head(3)
+        for _, row in recent_updates.iterrows():
+            highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row['Project / Dashboard'])}:</strong> {html_escape(row['This Week Delivered'])}</li>"""
+    
+    if not highlights_html:
+        highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
+
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="margin: 0; padding: 20px; background-color: #f4f7fb;">
+        <div style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
+                <tr>
+                    <td width="30%" valign="middle">
+                        <img src="https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png" alt="Factspan" width="180" style="display: block; border: 0;" />
+                    </td>
+                    <td width="70%" align="right" valign="middle">
+                        <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">FACTSPAN REPORTING</div>
+                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">Weekly Project Report</div>
+                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot • {date_str}</div>
+                    </td>
+                </tr>
+            </table>
+            <div style="border-top: 4px solid #ea580c;"></div>
+            <div style="padding: 25px;">
+                <p style="color: #334155; font-size: 14px; margin-top: 0;">Hi Team,</p>
+                <p style="color: #475569; font-size: 14px; line-height: 1.6; margin-bottom: 25px;">
+                    Please find below the latest weekly progress snapshot for the <strong>{html_escape(report_title)}</strong>.
+                </p>
+                <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
+                <table width="100%" cellpadding="0" cellspacing="10" border="0" style="margin-left: -10px; margin-right: -10px; margin-bottom: 25px;">
+                    <tr>
+                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #f8fafc;">
+                            <div style="font-size: 28px; font-weight: bold; color: #1e293b;">{total_projects}</div>
+                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
+                        </td>
+                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #f8fafc;">
+                            <div style="font-size: 28px; font-weight: bold; color: #16a34a;">{delivered}</div>
+                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">UPDATES DELIVERED</div>
+                        </td>
+                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #fffbeb;">
+                            <div style="font-size: 28px; font-weight: bold; color: #ea580c;">{avg_comp}%</div>
+                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">AVG COMPLETION</div>
+                        </td>
+                        <td width="25%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 10px; background: #fef2f2;">
+                            <div style="font-size: 28px; font-weight: bold; color: #dc2626;">{risks}</div>
+                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">AT RISK / BLOCKED</div>
+                        </td>
+                    </tr>
+                </table>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px;">
+                    <thead>
+                        <tr style="background-color: #1e293b;">
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">PROJECT / OWNER</th>
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">RESOURCE</th>
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">LEARNING PROGRESS</th>
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">TARGET DATE</th>
+                            <th align="left" style="padding: 12px; color: #ffffff; font-size: 12px; font-weight: bold;">EXAM STATUS</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {table_rows}
+                    </tbody>
+                </table>
+                <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px;">
+                    <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates</h4>
+                    <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 14px; line-height: 1.6;">
+                        {highlights_html}
+                    </ul>
+                </div>
+            </div>
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #1e293b; padding: 15px 25px;">
+                <tr>
+                    <td align="left" style="color: #f1f5f9; font-size: 11px;">
+                        Factspan • Weekly Project Report • {html_escape(report_title)}
+                    </td>
+                    <td align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">
+                        Staying Relevant and Ahead through Fluid Intelligence
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </body>
+    </html>
+    """
+    return html_body
+
+def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, dataframe=None):
     recipients = [x.strip() for x in recipients if x.strip()]; cc_recipients = [x.strip() for x in (cc_recipients or []) if x.strip()]
     if not recipients: return False, "Please enter at least one recipient email address."
     cfg = st.secrets if hasattr(st, "secrets") else {}; host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", "")); port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587"))); username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", "")); password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", "")); sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username)); use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
     if not host or not sender: return False, "Email sending is not configured (SMTP secrets missing)."
-    msg = EmailMessage(); msg["Subject"] = report_title; msg["From"] = sender; msg["To"] = ", ".join(recipients)
+    
+    msg = EmailMessage()
+    msg["Subject"] = report_title
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
     if cc_recipients: msg["Cc"] = ", ".join(cc_recipients)
-    msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
-    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
+    
+    if dataframe is not None and not dataframe.empty:
+        html_content = generate_html_email_body(dataframe, report_title)
+        msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
+        msg.add_alternative(html_content, subtype='html')
+    else:
+        msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
+        
+    if pdf_bytes:
+        msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
+        
     try:
         with smtplib.SMTP(host, port, timeout=20) as server:
             if use_tls: server.starttls()
@@ -1254,7 +1397,7 @@ if st.session_state.get("show_send_dialog"):
                 current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
                 if current_pdf is None: st.error("PDF generation unavailable.")
                 else:
-                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list)
+                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, dataframe=filtered_df)
                     if ok: st.success(message); st.session_state["show_send_dialog"] = None
                     else: st.error(message)
         with b2:

@@ -171,6 +171,7 @@ if not st.session_state.authenticated:
         
         st.divider()
         
+        # --- DYNAMIC INVITE CODE LOGIC ---
         reg_invite = ""
         if reg_role != "Team Member":
             reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
@@ -193,6 +194,7 @@ if not st.session_state.authenticated:
             else:
                 invite_valid = False
                 
+                # Verify invite code ONLY if not a Team Member
                 if reg_role == "Team Member":
                     invite_valid = True
                 else:
@@ -495,6 +497,9 @@ def pct_value(value):
 
 def normalize_text(value):
     return str(value or "").strip().lower()
+
+def is_blank(value):
+    return normalize_text(value) in {"", "none", "na", "n/a", "nan"}
 
 def user_can_edit_row(row):
     """Server-side edit authorization; UI permissions are not trusted for writes."""

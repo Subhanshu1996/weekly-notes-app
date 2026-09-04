@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 import io
 import uuid
 import os
@@ -28,9 +29,12 @@ except ImportError:
     OPENPYXL_AVAILABLE = False
 
 # =========================================================
-# APP CONFIGURATION
+# APP CONFIGURATION & TIMEZONE
 # =========================================================
 st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout="wide")
+
+# Set global timezone to IST
+IST = ZoneInfo("Asia/Kolkata")
 
 # =========================================================
 # SECURITY & ROLE-BASED LOGIN SCREEN
@@ -215,7 +219,7 @@ if 'success_message' not in st.session_state: st.session_state.success_message =
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 if 'nav_selection' not in st.session_state: st.session_state.nav_selection = "📋 Weekly Summary"
 if 'show_send_dialog' not in st.session_state: st.session_state.show_send_dialog = None
-if 'last_refresh_at' not in st.session_state: st.session_state.last_refresh_at = datetime.now()
+if 'last_refresh_at' not in st.session_state: st.session_state.last_refresh_at = datetime.now(IST)
 if 'quick_filter' not in st.session_state: st.session_state.quick_filter = "All"
 if 'project_search' not in st.session_state: st.session_state.project_search = ""
 if 'executive_compact' not in st.session_state: st.session_state.executive_compact = False
@@ -279,7 +283,7 @@ def date_from_row(row):
     return parse_date(row.get("Updated Expected Delivery date"))
 
 def delivery_state(row, as_of=None):
-    as_of = as_of or date.today()
+    as_of = as_of or datetime.now(IST).date()
     status = normalize_text(row.get("Status"))
     if status == "completed":
         return "Delivered"
@@ -304,7 +308,7 @@ def data_quality_flags(row):
         flags.append("Completion is 100% but status is not Completed")
     if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")):
         flags.append("Risk/blocked status without a blocker explanation")
-    if due and status != "completed" and due < date.today():
+    if due and status != "completed" and due < datetime.now(IST).date():
         flags.append("Expected delivery date is overdue")
     if is_blank(row.get("This Week Delivered")):
         flags.append("No weekly delivery update reported")
@@ -312,7 +316,7 @@ def data_quality_flags(row):
 
 def classify_attention(row, as_of=None):
     """Return a priority label and reasons. Existing statuses remain authoritative."""
-    as_of = as_of or date.today()
+    as_of = as_of or datetime.now(IST).date()
     status = normalize_text(row.get("Status"))
     reasons = []
     priority = "Normal"
@@ -499,7 +503,7 @@ def create_pdf_report(dataframe, header_title):
     pdf.cell(170, 5, safe_pdf_text(header_title), ln=True)
     pdf.set_font("Arial", "", 7.5)
     pdf.set_xy(15, 35)
-    pdf.cell(170, 4, safe_pdf_text(f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')}"), ln=True)
+    pdf.cell(170, 4, safe_pdf_text(f"Generated: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}"), ln=True)
 
     total_projects = len(dataframe)
     total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
@@ -644,7 +648,7 @@ util_c1, util_c2, util_c3, util_c4 = st.columns([1.2, 1.4, 5.2, 1.8])
 with util_c1:
     if st.button("🔄 Refresh Data", key="refresh_data_top", use_container_width=True):
         refresh_cloud_data()
-        st.session_state.last_refresh_at = datetime.now()
+        st.session_state.last_refresh_at = datetime.now(IST)
         st.rerun()
 with util_c2:
     st.caption(f"Data loaded: {st.session_state.last_refresh_at.strftime('%d %b %Y, %I:%M %p')}")
@@ -698,7 +702,6 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
 
     st.markdown('<div style="font-size: 14px; font-weight: bold; color: #16324f; letter-spacing: 1px; text-transform: uppercase; border-bottom: 2px dashed #cbd5e1; padding-bottom: 8px; margin-bottom: 16px; margin-top: 8px;">🔎 REPORT FILTERS & SEARCH</div>', unsafe_allow_html=True)
     
-    # --- REPAIRED: Integrated Search and Quick Filters ---
     f_col1, f_col2, f_col3, f_col4 = st.columns(4)
     with f_col1:
         filter_acc = st.selectbox("Account", options=["All"] + list(df["Account"].unique()), key="filter_account")
@@ -732,7 +735,6 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
         quick_filters_opts = ["All", "At Risk / Blocked", "Due Soon", "Overdue", "Missing Update", "Data Quality Issues"]
         quick_filter = st.selectbox("⚡ Quick Filters", options=quick_filters_opts, key="quick_filter_select")
         
-        # Apply Quick Filters Logic
         if quick_filter == "At Risk / Blocked":
             filtered_df = filtered_df[filtered_df["Status"].isin(["At Risk", "Blocked"])]
         elif quick_filter == "Due Soon":
@@ -834,7 +836,7 @@ if nav_selection == "✍️ Enter Notes":
         st.markdown('<div class="section-header">02 — Timeframe & Ownership</div>', unsafe_allow_html=True)
         with st.container(border=True):
             t_col1, t_col2, t_col3, t_col4 = st.columns(4)
-            with t_col1: year = st.selectbox("Year", options=[datetime.now().year, datetime.now().year+1, datetime.now().year+2])
+            with t_col1: year = st.selectbox("Year", options=[datetime.now(IST).year, datetime.now(IST).year+1, datetime.now(IST).year+2])
             with t_col2: month = st.selectbox("Month", options=["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
             with t_col3: week = st.selectbox("Week", options=["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"])
             with t_col4: resource = st.text_input("Resource Email", value=st.session_state.current_email)
@@ -939,7 +941,7 @@ if nav_selection == "✍️ Enter Notes":
                             save_new_notes_to_gsheets(final_entries)
                             st.session_state.notes_db = load_data_from_gsheets()
                             st.session_state.data_synced = True
-                            st.session_state.last_refresh_at = datetime.now()
+                            st.session_state.last_refresh_at = datetime.now(IST)
                             st.session_state.success_message = f"Notes successfully saved to Google Sheets."
                             st.session_state.show_success = True
                             st.session_state.project_count = 1
@@ -1090,7 +1092,7 @@ elif nav_selection == "📈 Executive Report":
                                                 update_existing_note_in_gsheets(updated_data)
                                                 st.session_state.notes_db = load_data_from_gsheets()
                                                 st.session_state.data_synced = True
-                                                st.session_state.last_refresh_at = datetime.now()
+                                                st.session_state.last_refresh_at = datetime.now(IST)
                                             st.session_state.edit_id = None; st.session_state.show_success = True; st.session_state.success_message = "Cloud update saved successfully."; st.rerun()
                                     with e_btn_c2:
                                         if st.button("Cancel", key=f"ecancel_{rec_id}", use_container_width=True):

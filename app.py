@@ -171,6 +171,7 @@ if not st.session_state.authenticated:
         
         st.divider()
         
+        # --- DYNAMIC INVITE CODE LOGIC ---
         reg_invite = ""
         if reg_role != "Team Member":
             reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
@@ -515,30 +516,6 @@ def user_can_edit_row(row):
 def row_submission_key(row):
     return "|".join(normalize_text(row.get(k)) for k in ["Account","Team","Resource","Project / Dashboard","Year","Month","Week"])
 
-def health_score(row, as_of=None):
-    """Deterministic 0-100 project health score based only on existing fields."""
-    as_of = as_of or datetime.now(IST).date()
-    score = 100
-    status = normalize_text(row.get("Status"))
-    comp = pct_value(row.get("Completion %"))
-    due = date_from_row(row)
-    if status == "blocked": score -= 35
-    elif status == "at risk": score -= 25
-    elif status == "on hold": score -= 15
-    if due and status != "completed":
-        days = (due - as_of).days
-        if days < 0: score -= 25
-        elif days <= 7: score -= 10
-    if comp >= 100 and status != "completed": score -= 15
-    if status == "completed" and comp < 100: score -= 15
-    if is_blank(row.get("This Week Delivered")): score -= 8
-    if status in {"at risk","blocked"} and is_blank(row.get("Blocker")): score -= 7
-    if pct_value(row.get("Utilization %")) > 100: score -= 10
-    return max(0, min(100, int(score)))
-
-def health_label(score):
-    return "Healthy" if score >= 80 else ("Attention" if score >= 60 else "Critical")
-
 def date_from_row(row):
     return parse_date(row.get("Updated Expected Delivery date"))
 
@@ -563,6 +540,94 @@ def delivery_bucket(row, as_of=None):
     if days <= 7: return "Next 7 Days"
     if days <= 14: return "8–14 Days"
     return "15+ Days"
+
+def health_score(row, as_of=None):
+    """Deterministic 0-100 project health score based only on existing fields."""
+    as_of = as_of or datetime.now(IST).date()
+    score = 100
+    status = normalize_text(row.get("Status"))
+    comp = pct_value(row.get("Completion %"))
+    due = date_from_row(row)
+    if status == "blocked": score -= 35
+    elif status == "at risk": score -= 25
+    elif status == "on hold": score -= 15
+    if due and status != "completed":
+        days = (due - as_of).days
+        if days < 0: score -= 25
+        elif days <= 7: score -= 10
+    if comp >= 100 and status != "completed": score -= 15
+    if status == "completed" and comp < 100: score -= 15
+    if is_blank(row.get("This Week Delivered")): score -= 8
+    if status in {"at risk","blocked"} and is_blank(row.get("Blocker")): score -= 7
+    if pct_value(row.get("Utilization %")) > 100: score -= 10
+    return max(0, min(100, int(score)))
+
+def health_label(score):
+    return "Healthy" if score >= 80 else ("Attention" if score >= 60 else "Critical")
+
+def data_quality_flags(row):
+    flags = []
+    status = normalize_text(row.get("Status"))
+    comp = pct_value(row.get("Completion %"))
+    due = date_from_row(row)
+    if status == "completed" and comp < 100:
+        flags.append("Completed but completion is below 100%")
+    if comp >= 100 and status != "completed":
+        flags.append("Completion is 100% but status is not Completed")
+    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")):
+        flags.append("Risk/blocked status without a blocker explanation")
+    start = parse_date(row.get("Start date"))
+    initial = parse_date(row.get("Initial Delivery date"))
+    if start and initial and initial < start: flags.append("Initial delivery date is before start date")
+    if start and due and due < start: flags.append("Updated delivery date is before start date")
+    if status == "cancelled" and comp > 0: flags.append("Cancelled item has non-zero completion")
+    if status == "not started" and comp > 0: flags.append("Not Started item has non-zero completion")
+    if status == "completed" and due and due > datetime.now(IST).date(): flags.append("Completed item has a future delivery date")
+    if due and status != "completed" and due < datetime.now(IST).date():
+        flags.append("Expected delivery date is overdue")
+    if is_blank(row.get("This Week Delivered")):
+        flags.append("No weekly delivery update reported")
+    util = pct_value(row.get("Utilization %"))
+    if util > 100: flags.append("Utilization exceeds 100%")
+    if is_blank(row.get("Business Owner")): flags.append("Business owner is missing")
+    if is_blank(row.get("Next Week Priority")): flags.append("Next-week priority is missing")
+    return flags
+
+def classify_attention(row, as_of=None):
+    """Return a priority label and reasons. Existing statuses remain authoritative."""
+    as_of = as_of or datetime.now(IST).date()
+    status = normalize_text(row.get("Status"))
+    reasons = []
+    priority = "Normal"
+
+    if status == "blocked":
+        priority = "Critical"
+        reasons.append("Blocked")
+    elif status == "at risk":
+        priority = "Critical"
+        reasons.append("At Risk")
+    elif status == "on hold":
+        priority = "Attention"
+        reasons.append("On Hold")
+
+    due = date_from_row(row)
+    if due and status != "completed":
+        days = (due - as_of).days
+        if days < 0:
+            priority = "Critical"
+            reasons.append(f"Overdue by {abs(days)} day(s)")
+        elif days <= 7:
+            if priority == "Normal":
+                priority = "Attention"
+            reasons.append(f"Due in {days} day(s)")
+
+    dq = data_quality_flags(row)
+    if dq:
+        if priority == "Normal":
+            priority = "Attention"
+        reasons.extend(dq)
+
+    return priority, reasons
 
 def suggested_action(row):
     priority, reasons = classify_attention(row)
@@ -628,70 +693,6 @@ def write_audit_event(action, row_id, old_row=None, new_row=None):
         sheet.append_row([datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"), action, str(row_id), st.session_state.get("current_name",""), st.session_state.get("current_email",""), st.session_state.get("current_role",""), str(old_row or {}), str(new_row or {})])
     except Exception:
         pass
-
-def data_quality_flags(row):
-    flags = []
-    status = normalize_text(row.get("Status"))
-    comp = pct_value(row.get("Completion %"))
-    due = date_from_row(row)
-    if status == "completed" and comp < 100:
-        flags.append("Completed but completion is below 100%")
-    if comp >= 100 and status != "completed":
-        flags.append("Completion is 100% but status is not Completed")
-    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")):
-        flags.append("Risk/blocked status without a blocker explanation")
-    start = parse_date(row.get("Start date"))
-    initial = parse_date(row.get("Initial Delivery date"))
-    if start and initial and initial < start: flags.append("Initial delivery date is before start date")
-    if start and due and due < start: flags.append("Updated delivery date is before start date")
-    if status == "cancelled" and comp > 0: flags.append("Cancelled item has non-zero completion")
-    if status == "not started" and comp > 0: flags.append("Not Started item has non-zero completion")
-    if status == "completed" and due and due > datetime.now(IST).date(): flags.append("Completed item has a future delivery date")
-    if due and status != "completed" and due < datetime.now(IST).date():
-        flags.append("Expected delivery date is overdue")
-    if is_blank(row.get("This Week Delivered")):
-        flags.append("No weekly delivery update reported")
-    util = pct_value(row.get("Utilization %"))
-    if util > 100: flags.append("Utilization exceeds 100%")
-    if is_blank(row.get("Business Owner")): flags.append("Business owner is missing")
-    if is_blank(row.get("Next Week Priority")): flags.append("Next-week priority is missing")
-    return flags
-
-def classify_attention(row, as_of=None):
-    """Return a priority label and reasons. Existing statuses remain authoritative."""
-    as_of = as_of or datetime.now(IST).date()
-    status = normalize_text(row.get("Status"))
-    reasons = []
-    priority = "Normal"
-
-    if status == "blocked":
-        priority = "Critical"
-        reasons.append("Blocked")
-    elif status == "at risk":
-        priority = "Critical"
-        reasons.append("At Risk")
-    elif status == "on hold":
-        priority = "Attention"
-        reasons.append("On Hold")
-
-    due = date_from_row(row)
-    if due and status != "completed":
-        days = (due - as_of).days
-        if days < 0:
-            priority = "Critical"
-            reasons.append(f"Overdue by {abs(days)} day(s)")
-        elif days <= 7:
-            if priority == "Normal":
-                priority = "Attention"
-            reasons.append(f"Due in {days} day(s)")
-
-    dq = data_quality_flags(row)
-    if dq:
-        if priority == "Normal":
-            priority = "Attention"
-        reasons.extend(dq)
-
-    return priority, reasons
 
 def get_latest_prior_week(df, selected_year=None, selected_month=None, selected_week=None):
     """Find the immediately preceding reported week using the app's Year/Month/Week fields."""
@@ -1072,27 +1073,36 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     </style>
     """, unsafe_allow_html=True)
 
-    # UI FIX: Making the expander title static so it stays open when clicking multiple filters.
+    active_filter_count = 0
+    if st.session_state.get("filter_resources"): active_filter_count += 1
+    if st.session_state.get("filter_year"): active_filter_count += 1
+    if st.session_state.get("filter_month"): active_filter_count += 1
+    if st.session_state.get("filter_week"): active_filter_count += 1
+    if st.session_state.get("quick_filter_select", "All") != "All": active_filter_count += 1
+    
     with st.expander("🔎 Filters & Search", expanded=True):
         st.caption("Use the compact two-row filter bar. Selected multi-filters can be removed directly from their fields.")
-        pv1,pv2,pv3,pv4,pv5 = st.columns(5)
+        
         resource_options_all = list(df["Resource"].dropna().unique())
-        with pv1:
-            if st.button("My Updates", key="preset_my_updates", use_container_width=True):
-                st.session_state.filter_resources = [st.session_state.current_email] if st.session_state.current_email in resource_options_all else []
-                st.session_state.quick_filter_select = "All"; st.rerun()
-        with pv2:
-            if st.button("At Risk", key="preset_at_risk", use_container_width=True):
-                st.session_state.quick_filter_select = "At Risk / Blocked"; st.rerun()
-        with pv3:
-            if st.button("Overdue", key="preset_overdue", use_container_width=True):
-                st.session_state.quick_filter_select = "Overdue"; st.rerun()
-        with pv4:
-            if st.button("Due Soon", key="preset_due_soon", use_container_width=True):
-                st.session_state.quick_filter_select = "Due Soon"; st.rerun()
-        with pv5:
-            if st.button("Executive View", key="preset_exec_view", use_container_width=True):
-                st.session_state.filter_resources=[]; st.session_state.filter_year=[]; st.session_state.filter_month=[]; st.session_state.filter_week=[]; st.session_state.quick_filter_select="All"; st.session_state.project_search_input=""; st.rerun()
+        
+        def preset_my_updates_cb():
+            st.session_state.filter_resources = [st.session_state.current_email] if st.session_state.current_email in resource_options_all else []
+            st.session_state.quick_filter_select = "All"
+        def preset_at_risk_cb(): st.session_state.quick_filter_select = "At Risk / Blocked"
+        def preset_overdue_cb(): st.session_state.quick_filter_select = "Overdue"
+        def preset_due_soon_cb(): st.session_state.quick_filter_select = "Due Soon"
+        def preset_exec_view_cb():
+            st.session_state.filter_resources=[]; st.session_state.filter_year=[]; st.session_state.filter_month=[]; st.session_state.filter_week=[]; st.session_state.quick_filter_select="All"; st.session_state.project_search_input=""
+        def clear_filters_cb():
+            for k,v in [("filter_account","All"),("filter_team","All"),("filter_resources",[]),("filter_year",[]),("filter_month",[]),("filter_week",[]),("quick_filter_select","All"),("project_search_input","")]:
+                st.session_state[k]=v
+
+        pv1,pv2,pv3,pv4,pv5 = st.columns(5)
+        with pv1: st.button("My Updates", key="preset_my_updates", use_container_width=True, on_click=preset_my_updates_cb)
+        with pv2: st.button("At Risk", key="preset_at_risk", use_container_width=True, on_click=preset_at_risk_cb)
+        with pv3: st.button("Overdue", key="preset_overdue", use_container_width=True, on_click=preset_overdue_cb)
+        with pv4: st.button("Due Soon", key="preset_due_soon", use_container_width=True, on_click=preset_due_soon_cb)
+        with pv5: st.button("Executive View", key="preset_exec_view", use_container_width=True, on_click=preset_exec_view_cb)
         
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
@@ -1133,9 +1143,7 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
 
         rc1, rc2 = st.columns([1,7])
         with rc1:
-            if st.button("↺ Clear Filters", key="clear_all_filters", use_container_width=True):
-                for k,v in [("filter_account","All"),("filter_team","All"),("filter_resources",[]),("filter_year",[]),("filter_month",[]),("filter_week",[]),("quick_filter_select","All"),("project_search_input","")]: st.session_state[k]=v
-                st.rerun()
+            st.button("↺ Clear Filters", key="clear_all_filters", use_container_width=True, on_click=clear_filters_cb)
         with rc2:
             chips=[]
             if filter_acc != "All": chips.append(f"Account: {filter_acc}")

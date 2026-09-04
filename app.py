@@ -71,8 +71,8 @@ def update_user_password_in_gsheets(email, new_hashed_pwd):
     except Exception as e:
         return False
 
-def send_otp_email(recipient_email, otp):
-    """Sends a 6-digit OTP for password reset."""
+def send_otp_email(recipient_email, otp, context="Password Reset"):
+    """Sends a 6-digit OTP for email verification or password reset."""
     cfg = st.secrets if hasattr(st, "secrets") else {}
     host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
     port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
@@ -85,10 +85,10 @@ def send_otp_email(recipient_email, otp):
         return False, "Email sending is not configured in secrets."
     
     msg = EmailMessage()
-    msg["Subject"] = "Password Reset - Weekly Project Report"
+    msg["Subject"] = f"{context} - Weekly Project Report"
     msg["From"] = sender
     msg["To"] = recipient_email
-    msg.set_content(f"Your One-Time Password (OTP) to reset your account is: {otp}\n\nIf you did not request a password reset, please ignore this email.")
+    msg.set_content(f"Your One-Time Password (OTP) to verify your account is: {otp}\n\nIf you did not request this, please ignore this email.")
     
     try:
         with smtplib.SMTP(host, port, timeout=20) as server:
@@ -111,6 +111,8 @@ if "authenticated" not in st.session_state:
     st.session_state.current_acc_scope = ""
     st.session_state.reset_otp = None
     st.session_state.reset_email = None
+    st.session_state.reg_otp = None
+    st.session_state.reg_details = None
 
 if not st.session_state.authenticated:
     st.markdown('<div style="max-width: 480px; margin: 60px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
@@ -151,88 +153,131 @@ if not st.session_state.authenticated:
                     else:
                         st.error("Invalid email or password.")
                         
-    # --- TAB 2: CREATE ACCOUNT ---
+    # --- TAB 2: CREATE ACCOUNT (WITH OTP VERIFICATION) ---
     with tab2:
-        reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
-        reg_email = st.text_input("Company Email", key="reg_email", placeholder="name@company.com").strip().lower()
-        reg_role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"], key="reg_role")
-        
-        reg_acc_scope = ""
-        reg_scope = ""
-        if reg_role == "Team Lead":
-            reg_acc_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp", key="reg_acc_scope").strip()
-            reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)", key="reg_scope").strip()
-        elif reg_role == "Account Manager":
-            reg_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)", key="reg_scope2").strip()
+        if not st.session_state.reg_otp:
+            reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
+            reg_email = st.text_input("Company Email", key="reg_email", placeholder="name@company.com").strip().lower()
+            reg_role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"], key="reg_role")
             
-        c1, c2 = st.columns(2)
-        with c1: reg_pwd = st.text_input("Create Password", type="password", key="reg_pwd")
-        with c2: reg_pwd2 = st.text_input("Confirm Password", type="password", key="reg_pwd2")
-        
-        st.divider()
-        
-        # --- DYNAMIC INVITE CODE LOGIC ---
-        reg_invite = ""
-        if reg_role != "Team Member":
-            reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
-        else:
-            st.caption("✨ Team Members can register directly without an invite code.")
-        
-        if st.button("Create Account", type="primary", use_container_width=True):
-            if not reg_name:
-                st.error("Please enter your name.")
-            elif not reg_email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", reg_email):
-                st.error("Please enter a valid company email address.")
-            elif reg_role == "Team Lead" and (not reg_acc_scope or not reg_scope):
-                st.error("Please enter both your Account and Team scope.")
-            elif reg_role == "Account Manager" and not reg_scope:
-                st.error("Please enter your Account(s) scope.")
-            elif len(reg_pwd) < 6:
-                st.error("Password must be at least 6 characters.")
-            elif reg_pwd != reg_pwd2:
-                st.error("Passwords do not match.")
+            reg_acc_scope = ""
+            reg_scope = ""
+            if reg_role == "Team Lead":
+                reg_acc_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp", key="reg_acc_scope").strip()
+                reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)", key="reg_scope").strip()
+            elif reg_role == "Account Manager":
+                reg_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)", key="reg_scope2").strip()
+                
+            c1, c2 = st.columns(2)
+            with c1: reg_pwd = st.text_input("Create Password", type="password", key="reg_pwd")
+            with c2: reg_pwd2 = st.text_input("Confirm Password", type="password", key="reg_pwd2")
+            
+            st.divider()
+            
+            reg_invite = ""
+            if reg_role != "Team Member":
+                reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
             else:
-                invite_valid = False
-                
-                # Verify invite code ONLY if not a Team Member
-                if reg_role == "Team Member":
-                    invite_valid = True
+                st.caption("✨ Team Members can register directly without an invite code.")
+            
+            if st.button("Send Verification Code", type="primary", use_container_width=True):
+                if not reg_name:
+                    st.error("Please enter your name.")
+                elif not reg_email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", reg_email):
+                    st.error("Please enter a valid company email address.")
+                elif reg_role == "Team Lead" and (not reg_acc_scope or not reg_scope):
+                    st.error("Please enter both your Account and Team scope.")
+                elif reg_role == "Account Manager" and not reg_scope:
+                    st.error("Please enter your Account(s) scope.")
+                elif len(reg_pwd) < 6:
+                    st.error("Password must be at least 6 characters.")
+                elif reg_pwd != reg_pwd2:
+                    st.error("Passwords do not match.")
                 else:
-                    password_keys = {"Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
-                    req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
+                    invite_valid = False
                     
-                    if not req_invite:
-                        st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
-                    elif reg_invite != req_invite:
-                        st.error(f"Invalid Invite Code for the {reg_role} role.")
-                    else:
+                    if reg_role == "Team Member":
                         invite_valid = True
-                
-                if invite_valid:
-                    with st.spinner("Setting up your account..."):
-                        client = get_gspread_client()
-                        spreadsheet = client.open("Weekly Notes Database")
+                    else:
+                        password_keys = {"Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
+                        req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
                         
-                        try:
-                            u_sheet = spreadsheet.worksheet("Users")
-                        except Exception:
-                            u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
-                            u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
-                        
-                        records = u_sheet.get_all_records()
-                        if any(str(r.get("Email","")).strip().lower() == reg_email for r in records):
-                            st.error("An account with this email already exists. Please log in.")
+                        if not req_invite:
+                            st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
+                        elif reg_invite != req_invite:
+                            st.error(f"Invalid Invite Code for the {reg_role} role.")
                         else:
-                            hashed_pw = hashlib.sha256(reg_pwd.encode()).hexdigest()
-                            u_sheet.append_row([reg_email, reg_name, reg_role, reg_scope, reg_acc_scope, hashed_pw])
+                            invite_valid = True
+                    
+                    if invite_valid:
+                        with st.spinner("Checking details..."):
+                            client = get_gspread_client()
+                            spreadsheet = client.open("Weekly Notes Database")
+                            try:
+                                u_sheet = spreadsheet.worksheet("Users")
+                                records = u_sheet.get_all_records()
+                            except Exception:
+                                records = []
+                            
+                            if any(str(r.get("Email","")).strip().lower() == reg_email for r in records):
+                                st.error("An account with this email already exists. Please log in.")
+                            else:
+                                otp = str(random.randint(100000, 999999))
+                                ok, msg = send_otp_email(reg_email, otp, context="Account Verification")
+                                if ok:
+                                    st.session_state.reg_otp = otp
+                                    st.session_state.reg_details = {
+                                        "name": reg_name, "email": reg_email, "role": reg_role,
+                                        "scope": reg_scope, "acc_scope": reg_acc_scope, "pwd": reg_pwd
+                                    }
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+        else:
+            st.success(f"Verification code sent to {st.session_state.reg_details['email']}")
+            reg_entered_otp = st.text_input("Enter 6-digit OTP", key="reg_entered_otp", placeholder="000000")
+            st.divider()
+            
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                if st.button("Verify & Create Account", type="primary", use_container_width=True):
+                    if reg_entered_otp.strip() != st.session_state.reg_otp:
+                        st.error("Invalid verification code.")
+                    else:
+                        with st.spinner("Creating your account securely..."):
+                            client = get_gspread_client()
+                            spreadsheet = client.open("Weekly Notes Database")
+                            try:
+                                u_sheet = spreadsheet.worksheet("Users")
+                            except Exception:
+                                u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
+                                u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
+                            
+                            hashed_pw = hashlib.sha256(st.session_state.reg_details['pwd'].encode()).hexdigest()
+                            u_sheet.append_row([
+                                st.session_state.reg_details['email'], 
+                                st.session_state.reg_details['name'], 
+                                st.session_state.reg_details['role'], 
+                                st.session_state.reg_details['scope'], 
+                                st.session_state.reg_details['acc_scope'], 
+                                hashed_pw
+                            ])
                             
                             st.session_state.authenticated = True
-                            st.session_state.current_email = reg_email
-                            st.session_state.current_name = reg_name
-                            st.session_state.current_role = reg_role
-                            st.session_state.current_scope = reg_scope
-                            st.session_state.current_acc_scope = reg_acc_scope
+                            st.session_state.current_email = st.session_state.reg_details['email']
+                            st.session_state.current_name = st.session_state.reg_details['name']
+                            st.session_state.current_role = st.session_state.reg_details['role']
+                            st.session_state.current_scope = st.session_state.reg_details['scope']
+                            st.session_state.current_acc_scope = st.session_state.reg_details['acc_scope']
+                            
+                            st.session_state.reg_otp = None
+                            st.session_state.reg_details = None
                             st.rerun()
+            with rc2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.reg_otp = None
+                    st.session_state.reg_details = None
+                    st.rerun()
 
     # --- TAB 3: FORGOT PASSWORD ---
     with tab3:
@@ -258,7 +303,7 @@ if not st.session_state.authenticated:
                             st.error("No account found with this email.")
                         else:
                             otp = str(random.randint(100000, 999999))
-                            ok, msg = send_otp_email(reset_email_input, otp)
+                            ok, msg = send_otp_email(reset_email_input, otp, context="Password Reset")
                             if ok:
                                 st.session_state.reset_otp = otp
                                 st.session_state.reset_email = reset_email_input
@@ -1079,8 +1124,9 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     if st.session_state.get("filter_month"): active_filter_count += 1
     if st.session_state.get("filter_week"): active_filter_count += 1
     if st.session_state.get("quick_filter_select", "All") != "All": active_filter_count += 1
+    filter_title = f"🔎 Filters & Search {'· ' + str(active_filter_count) + ' active' if active_filter_count else '· All records'}"
     
-    with st.expander("🔎 Filters & Search", expanded=True):
+    with st.expander(filter_title, expanded=True):
         st.caption("Use the compact two-row filter bar. Selected multi-filters can be removed directly from their fields.")
         
         resource_options_all = list(df["Resource"].dropna().unique())

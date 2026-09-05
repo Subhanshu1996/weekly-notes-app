@@ -519,7 +519,8 @@ if 'success_message' not in st.session_state:
 if 'edit_id' not in st.session_state: 
     st.session_state.edit_id = None
 if 'nav_selection' not in st.session_state: 
-    st.session_state.nav_selection = "📋 Weekly Summary"
+    # Default explicitly to 'Enter Notes'
+    st.session_state.nav_selection = "✍️ Enter Notes"
 if 'show_send_dialog' not in st.session_state: 
     st.session_state.show_send_dialog = None
 if 'last_refresh_at' not in st.session_state: 
@@ -1546,7 +1547,7 @@ def create_excel_report(dataframe, report_title):
     wb.save(buffer)
     return buffer.getvalue()
 
-def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, excel_bytes=None, html_body=None):
+def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, dataframe=None):
     recipients, invalid_to = _validated_emails([x.strip() for x in recipients if x.strip()])
     cc_recipients, invalid_cc = _validated_emails([x.strip() for x in (cc_recipients or []) if x.strip()])
     if not recipients: 
@@ -1570,11 +1571,12 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, e
     if cc_recipients: 
         msg["Cc"] = ", ".join(cc_recipients)
     
-    if html_body:
-        msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
-        msg.add_alternative(html_body, subtype='html')
+    if dataframe is not None and not dataframe.empty:
+        html_content = generate_html_email_body(dataframe, report_title)
+        msg.set_content(f"Please find attached the {report_title}. The email contains the leadership summary; the attached PDF contains the detailed report.")
+        msg.add_alternative(html_content, subtype='html')
         
-        if os.path.exists("logo.png") and "cid:factspan_logo" in html_body:
+        if os.path.exists("logo.png") and "cid:factspan_logo" in html_content:
             try:
                 with open("logo.png", "rb") as img:
                     msg.get_payload()[1].add_related(img.read(), maintype='image', subtype='png', cid='<factspan_logo>')
@@ -1584,8 +1586,6 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, e
         
     if pdf_bytes:
         msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
-    if excel_bytes:
-        msg.add_attachment(excel_bytes, maintype="application", subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="Weekly_Project_Report.xlsx")
         
     try:
         with smtplib.SMTP(host, port, timeout=20) as server:
@@ -1680,13 +1680,6 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     </style>
     """, unsafe_allow_html=True)
 
-    active_filter_count = 0
-    if st.session_state.get("filter_resources"): active_filter_count += 1
-    if st.session_state.get("filter_year"): active_filter_count += 1
-    if st.session_state.get("filter_month"): active_filter_count += 1
-    if st.session_state.get("filter_week"): active_filter_count += 1
-    if st.session_state.get("quick_filter_select", "All") != "All": active_filter_count += 1
-    
     with st.expander("🔎 Filters & Search", expanded=True):
         st.caption("Use the compact two-row filter bar. Selected multi-filters can be removed directly from their fields.")
         
@@ -1794,6 +1787,21 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     reporting_month = format_badge_text(filter_month, month_options)
     reporting_week = format_badge_text(filter_week, week_options)
 
+    # Determine if any filters are currently applied
+    has_active_filters = (
+        filter_acc != "All" or 
+        filter_team != "All" or 
+        bool(selected_resources) or 
+        bool(project_search) or 
+        bool(filter_year) or 
+        bool(filter_month) or 
+        bool(filter_week) or 
+        quick_filter != "All"
+    )
+
+    if not has_active_filters:
+        filtered_df = pd.DataFrame()
+
     if not filtered_df.empty:
         if nav_selection == "📋 Weekly Summary":
             a1, a2, _ = st.columns([1.5, 1.5, 7])
@@ -1821,6 +1829,7 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
                     pdf_bytes = create_pdf_report(filtered_df, f"Executive Report: {reporting_month} - {reporting_week}")
                     st.markdown('<div class="marker-pdf"></div>', unsafe_allow_html=True)
                     st.download_button("📄 Export PDF", data=pdf_bytes, file_name="Weekly_Notes_Executive_Report.pdf", mime="application/pdf", key="pdf_tab3", use_container_width=True)
+
 else:
     if nav_selection == "✍️ Enter Notes": 
         filtered_df = df
@@ -1843,15 +1852,13 @@ if st.session_state.get("show_send_dialog"):
             if st.button("✉️ Send Now", type="primary", use_container_width=True, key="send_now"):
                 to_list = [x.strip() for x in to_value.replace(";", ",").split(",") if x.strip()]
                 cc_list = [x.strip() for x in cc_value.replace(";", ",").split(",") if x.strip()]
-                with st.spinner("Generating leadership email, PDF and Excel report..."):
+                with st.spinner("Generating leadership email and PDF report..."):
                     current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
-                    current_excel = create_excel_report(filtered_df, subject_value)
-                    current_html = generate_html_email_body(filtered_df, subject_value)
                     
                 if current_pdf is None: 
                     st.error("PDF generation unavailable.")
                 else:
-                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, current_excel, current_html)
+                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, dataframe=filtered_df)
                     if ok: 
                         st.success(message)
                         st.session_state["show_send_dialog"] = None
@@ -2079,8 +2086,12 @@ if nav_selection == "✍️ Enter Notes":
 # VIEW 2: WEEKLY SUMMARY
 # =========================================================
 elif nav_selection == "📋 Weekly Summary":
-    if df.empty or filtered_df.empty:
-        st.info("No data available to generate the summary. Please adjust filters or enter data.")
+    if df.empty:
+        st.info("No data available to generate the summary. Go to 'Enter Notes' to log an update.")
+    elif not has_active_filters:
+        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the dashboard. This prevents overloading the view with organization-wide data.")
+    elif filtered_df.empty:
+        st.warning("No records match your selected filters.")
     else:
         total_projects = len(filtered_df)
         total_resources = filtered_df["Resource"].nunique()
@@ -2228,8 +2239,12 @@ elif nav_selection == "📋 Weekly Summary":
 # VIEW 3: EXECUTIVE REPORT (WITH SMART EDIT BUTTONS)
 # =========================================================
 elif nav_selection == "📈 Executive Report":
-    if df.empty or filtered_df.empty:
+    if df.empty:
         st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
+    elif not has_active_filters:
+        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the dashboard. This prevents overloading the view with organization-wide data.")
+    elif filtered_df.empty:
+        st.warning("No records match your selected filters.")
     else:
         st.markdown('<div class="section-header">Portfolio Management View</div>', unsafe_allow_html=True)
         hscore, hcounts = portfolio_health(filtered_df)
@@ -2388,6 +2403,10 @@ elif nav_selection == "📈 Executive Report":
 elif nav_selection == "🚦 Action Center":
     if df.empty:
         st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
+    elif not has_active_filters:
+        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the Action Center. This prevents overloading the view with organization-wide data.")
+    elif filtered_df.empty:
+        st.warning("No records match your selected filters.")
     else:
         action_items = build_action_items(filtered_df if not filtered_df.empty else df)
         critical = [x for x in action_items if x["Priority"] == "Critical"]

@@ -8,11 +8,17 @@ import os
 import html
 import re
 import smtplib
-from email.message import EmailMessage
 import hashlib
+import hmac
+import secrets
+from email.message import EmailMessage
+from email.utils import getaddresses
 from collections import Counter
 import gspread
 from google.oauth2.service_account import Credentials
+
+# --- Email Logo Fallback URL ---
+EMAIL_LOGO_URL = "https://www.factspan.com/wp-content/uploads/2021/10/Factspan-Logo.png"
 
 # Optional PDF dependency
 try:
@@ -34,12 +40,93 @@ except ImportError:
 # APP CONFIGURATION & TIMEZONE
 # =========================================================
 st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout="wide")
-
-# Set global timezone to IST
 IST = ZoneInfo("Asia/Kolkata")
 
 # =========================================================
-# SECURITY & ROLE-BASED LOGIN SCREEN
+# SECURITY UTILITIES
+# =========================================================
+def verify_configured_password(entered_password, configured_password):
+    """Supports both plain-text secrets and production PBKDF2 hashes."""
+    configured = str(configured_password)
+    if configured.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations, salt_hex, digest_hex = configured.split("$", 3)
+            expected = bytes.fromhex(digest_hex)
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", 
+                entered_password.encode("utf-8"), 
+                bytes.fromhex(salt_hex), 
+                int(iterations)
+            )
+            return hmac.compare_digest(actual, expected)
+        except (ValueError, TypeError):
+            return False
+    return hmac.compare_digest(str(entered_password), configured)
+
+# =========================================================
+# GOOGLE SHEETS BACKEND HELPERS
+# =========================================================
+@st.cache_resource
+def get_gspread_client():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    return gspread.authorize(creds)
+
+def update_user_password_in_gsheets(email, new_hashed_pwd):
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open("Weekly Notes Database")
+        u_sheet = spreadsheet.worksheet("Users")
+        records = u_sheet.get_all_records()
+        headers = u_sheet.row_values(1)
+        
+        if "Password_Hash" not in headers:
+            return False
+            
+        col_idx = headers.index("Password_Hash") + 1
+        for idx, row in enumerate(records):
+            if str(row.get("Email", "")).strip().lower() == email.strip().lower():
+                row_idx = idx + 2 
+                u_sheet.update_cell(row_idx, col_idx, new_hashed_pwd)
+                return True
+        return False
+    except Exception as e:
+        return False
+
+def send_otp_email(recipient_email, otp, context="Password Reset"):
+    cfg = st.secrets if hasattr(st, "secrets") else {}
+    host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
+    port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
+    username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", ""))
+    password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
+    sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
+    use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+    
+    if not host or not sender: 
+        return False, "Email sending is not configured in secrets."
+    
+    msg = EmailMessage()
+    msg["Subject"] = f"{context} - Weekly Project Report"
+    msg["From"] = sender
+    msg["To"] = recipient_email
+    msg.set_content(
+        f"Your One-Time Password (OTP) to verify your account is: {otp}\n\n"
+        f"If you did not request this, please ignore this email."
+    )
+    
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            if use_tls:
+                server.starttls()
+            if username and password:
+                server.login(username, password)
+            server.send_message(msg)
+        return True, "OTP sent successfully."
+    except Exception as exc: 
+        return False, f"Unable to send email: {exc}"
+
+# =========================================================
+# SECURITY & ROLE-BASED LOGIN / REGISTRATION SCREEN
 # =========================================================
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -48,70 +135,255 @@ if "authenticated" not in st.session_state:
     st.session_state.current_role = ""
     st.session_state.current_scope = "" 
     st.session_state.current_acc_scope = ""
-if "current_name" not in st.session_state:
-    st.session_state.current_name = ""
+    st.session_state.reset_otp = None
+    st.session_state.reset_email = None
+    st.session_state.reg_otp = None
+    st.session_state.reg_details = None
+    st.session_state.login_attempts = 0
 
 if not st.session_state.authenticated:
-    st.markdown('<div style="max-width: 450px; margin: 80px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
-    st.markdown("<h2 style='color: #16324f; text-align:center; margin-bottom: 5px;'>🔒 App Locked</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in to access the Weekly Project Report.</p>", unsafe_allow_html=True)
+    st.markdown('<div style="max-width: 480px; margin: 60px auto; padding: 30px; background: white; border-radius: 12px; border: 1px solid #dfe5ec; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
+    st.markdown("<h2 style='color: #1e293b; text-align:center; margin-bottom: 5px;'>🔒 Project Portal</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b; margin-bottom: 20px; text-align:center;'>Log in or create an account to continue.</p>", unsafe_allow_html=True)
     
-    role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"])
-    user_name = st.text_input("Your Name", placeholder="e.g. John Smith")
-    user_email = st.text_input("Your Company Email", placeholder="name@company.com")
+    tab1, tab2, tab3 = st.tabs(["🔐 Log In", "📝 Create Account", "🔑 Forgot Password"])
     
-    user_scope = ""
-    user_account_scope = ""
-    
-    if role == "Team Lead":
-        user_account_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp")
-        user_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)")
-    elif role == "Account Manager":
-        user_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)")
+    with tab1:
+        log_email = st.text_input("Company Email", key="log_email", placeholder="name@company.com").strip().lower()
+        log_pwd = st.text_input("Password", type="password", key="log_pwd", placeholder="Your personal password")
         
-    entered_pwd = st.text_input("Password", type="password", placeholder="Enter Role Password...")
-    
-    if st.button("Unlock App", type="primary", use_container_width=True):
-        if not user_name.strip():
-            st.error("Please enter your name.")
-        elif not user_email.strip() or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", user_email.strip()):
-            st.error("Please enter a valid company email address.")
-        elif role == "Team Lead" and (not user_scope.strip() or not user_account_scope.strip()):
-            st.error("Please enter both your Account and Team.")
-        elif role == "Account Manager" and not user_scope.strip():
-            st.error("Please enter your Account(s).")
-        else:
-            valid_pass = False
-            password_keys = {"Team Member": "APP_PASSWORD", "Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
-            password_key = password_keys[role]
-            configured_password = st.secrets.get(password_key, os.getenv(password_key, ""))
-            if not configured_password:
-                st.error(f"Login is not configured for {role}. Please configure {password_key} in Streamlit secrets.")
-            elif entered_pwd == configured_password:
-                valid_pass = True
-            
-            if valid_pass:
-                st.session_state.authenticated = True
-                st.session_state.current_email = user_email.strip().lower()
-                st.session_state.current_name = user_name.strip()
-                st.session_state.current_role = role
-                st.session_state.current_scope = user_scope.strip()
-                st.session_state.current_acc_scope = user_account_scope.strip()
-                st.rerun()
+        if st.button("Log In", type="primary", use_container_width=True):
+            if st.session_state.get("login_attempts", 0) >= 5:
+                st.error("Too many unsuccessful login attempts. Please refresh the page to try again.")
+            elif not log_email or not log_pwd: 
+                st.error("Please enter your email and password.")
             else:
-                st.error("Incorrect password.")
+                with st.spinner("Authenticating..."):
+                    client = get_gspread_client()
+                    spreadsheet = client.open("Weekly Notes Database")
+                    try: 
+                        u_sheet = spreadsheet.worksheet("Users")
+                        records = u_sheet.get_all_records()
+                    except Exception: 
+                        records = []
+                    
+                    user = next((r for r in records if str(r.get("Email", "")).strip().lower() == log_email), None)
+                    hashed_attempt = hashlib.sha256(log_pwd.encode()).hexdigest()
+                    
+                    if user and user.get("Password_Hash") == hashed_attempt:
+                        st.session_state.authenticated = True
+                        st.session_state.current_email = str(user.get("Email", ""))
+                        st.session_state.current_name = str(user.get("Name", ""))
+                        st.session_state.current_role = str(user.get("Role", ""))
+                        st.session_state.current_scope = str(user.get("Scope", ""))
+                        st.session_state.current_acc_scope = str(user.get("Account_Scope", ""))
+                        st.session_state.login_attempts = 0
+                        st.rerun()
+                    else: 
+                        st.session_state.login_attempts = st.session_state.get("login_attempts", 0) + 1
+                        remaining = max(0, 5 - st.session_state.login_attempts)
+                        st.error(f"Invalid email or password. {remaining} attempt(s) remaining.")
+                        
+    with tab2:
+        if not st.session_state.reg_otp:
+            reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
+            reg_email = st.text_input("Company Email", key="reg_email", placeholder="name@company.com").strip().lower()
+            reg_role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"], key="reg_role")
+            
+            reg_acc_scope = ""
+            reg_scope = ""
+            if reg_role == "Team Lead":
+                reg_acc_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp", key="reg_acc_scope").strip()
+                reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team", key="reg_scope").strip()
+            elif reg_role == "Account Manager":
+                reg_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex", key="reg_scope2").strip()
+                
+            c1, c2 = st.columns(2)
+            with c1: 
+                reg_pwd = st.text_input("Create Password", type="password", key="reg_pwd")
+            with c2: 
+                reg_pwd2 = st.text_input("Confirm Password", type="password", key="reg_pwd2")
+            
+            st.divider()
+            
+            reg_invite = ""
+            if reg_role != "Team Member":
+                reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter secret code...", key="reg_invite")
+            else: 
+                st.caption("✨ Team Members can register directly without an invite code.")
+            
+            if st.button("Send Verification Code", type="primary", use_container_width=True):
+                if not reg_name: 
+                    st.error("Please enter your name.")
+                elif not reg_email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", reg_email): 
+                    st.error("Please enter a valid company email address.")
+                elif reg_role == "Team Lead" and (not reg_acc_scope or not reg_scope): 
+                    st.error("Please enter both your Account and Team scope.")
+                elif reg_role == "Account Manager" and not reg_scope: 
+                    st.error("Please enter your Account(s) scope.")
+                elif len(reg_pwd) < 6: 
+                    st.error("Password must be at least 6 characters.")
+                elif reg_pwd != reg_pwd2: 
+                    st.error("Passwords do not match.")
+                else:
+                    invite_valid = False
+                    if reg_role == "Team Member": 
+                        invite_valid = True
+                    else:
+                        password_keys = {
+                            "Team Lead": "LEAD_PASSWORD", 
+                            "Account Manager": "ACCOUNT_PASSWORD", 
+                            "Admin": "ADMIN_PASSWORD"
+                        }
+                        req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
+                        if not req_invite: 
+                            st.error(f"Configuration error: {password_keys[reg_role]} is not set.")
+                        elif not verify_configured_password(reg_invite, req_invite): 
+                            st.error(f"Invalid Invite Code for the {reg_role} role.")
+                        else: 
+                            invite_valid = True
+                    
+                    if invite_valid:
+                        with st.spinner("Checking details..."):
+                            client = get_gspread_client()
+                            spreadsheet = client.open("Weekly Notes Database")
+                            try: 
+                                u_sheet = spreadsheet.worksheet("Users")
+                                records = u_sheet.get_all_records()
+                            except Exception: 
+                                records = []
+                            
+                            if any(str(r.get("Email","")).strip().lower() == reg_email for r in records):
+                                st.error("An account with this email already exists. Please log in.")
+                            else:
+                                otp = str(random.randint(100000, 999999))
+                                ok, msg = send_otp_email(reg_email, otp, context="Account Verification")
+                                if ok:
+                                    st.session_state.reg_otp = otp
+                                    st.session_state.reg_details = {
+                                        "name": reg_name, 
+                                        "email": reg_email, 
+                                        "role": reg_role, 
+                                        "scope": reg_scope, 
+                                        "acc_scope": reg_acc_scope, 
+                                        "pwd": reg_pwd
+                                    }
+                                    st.rerun()
+                                else: 
+                                    st.error(msg)
+        else:
+            st.success(f"Verification code sent to {st.session_state.reg_details['email']}")
+            reg_entered_otp = st.text_input("Enter 6-digit OTP", key="reg_entered_otp", placeholder="000000")
+            st.divider()
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                if st.button("Verify & Create Account", type="primary", use_container_width=True):
+                    if reg_entered_otp.strip() != st.session_state.reg_otp: 
+                        st.error("Invalid verification code.")
+                    else:
+                        with st.spinner("Creating your account securely..."):
+                            client = get_gspread_client()
+                            spreadsheet = client.open("Weekly Notes Database")
+                            try: 
+                                u_sheet = spreadsheet.worksheet("Users")
+                            except Exception:
+                                u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
+                                u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
+                            
+                            hashed_pw = hashlib.sha256(st.session_state.reg_details['pwd'].encode()).hexdigest()
+                            u_sheet.append_row([
+                                st.session_state.reg_details['email'], 
+                                st.session_state.reg_details['name'], 
+                                st.session_state.reg_details['role'], 
+                                st.session_state.reg_details['scope'], 
+                                st.session_state.reg_details['acc_scope'], 
+                                hashed_pw
+                            ])
+                            
+                            st.session_state.authenticated = True
+                            st.session_state.current_email = st.session_state.reg_details['email']
+                            st.session_state.current_name = st.session_state.reg_details['name']
+                            st.session_state.current_role = st.session_state.reg_details['role']
+                            st.session_state.current_scope = st.session_state.reg_details['scope']
+                            st.session_state.current_acc_scope = st.session_state.reg_details['acc_scope']
+                            st.session_state.reg_otp = None
+                            st.session_state.reg_details = None
+                            st.rerun()
+            with rc2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.reg_otp = None
+                    st.session_state.reg_details = None
+                    st.rerun()
+
+    with tab3:
+        if not st.session_state.reset_otp:
+            st.markdown("<p style='font-size:14px; color:#475569;'>Enter your registered email address to receive a secure 6-digit reset code.</p>", unsafe_allow_html=True)
+            reset_email_input = st.text_input("Registered Company Email", key="reset_email_in", placeholder="name@company.com").strip().lower()
+            if st.button("Send OTP", use_container_width=True):
+                if not reset_email_input: 
+                    st.error("Please enter your email.")
+                else:
+                    with st.spinner("Verifying account..."):
+                        client = get_gspread_client()
+                        spreadsheet = client.open("Weekly Notes Database")
+                        try: 
+                            u_sheet = spreadsheet.worksheet("Users")
+                            records = u_sheet.get_all_records()
+                        except Exception: 
+                            records = []
+                        
+                        user = next((r for r in records if str(r.get("Email", "")).strip().lower() == reset_email_input), None)
+                        if not user: 
+                            st.error("No account found with this email.")
+                        else:
+                            otp = str(random.randint(100000, 999999))
+                            ok, msg = send_otp_email(reset_email_input, otp, context="Password Reset")
+                            if ok:
+                                st.session_state.reset_otp = otp
+                                st.session_state.reset_email = reset_email_input
+                                st.success(f"An OTP has been securely sent to {reset_email_input}")
+                                st.rerun()
+                            else: 
+                                st.error(msg)
+        else:
+            st.success(f"OTP sent to {st.session_state.reset_email}")
+            entered_otp = st.text_input("Enter 6-digit OTP", key="entered_otp", placeholder="000000")
+            st.divider()
+            new_pwd1 = st.text_input("New Password", type="password", key="new_pwd1", placeholder="At least 6 characters")
+            new_pwd2 = st.text_input("Confirm New Password", type="password", key="new_pwd2")
+            
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                if st.button("Reset Password", type="primary", use_container_width=True):
+                    if entered_otp.strip() != st.session_state.reset_otp: 
+                        st.error("Invalid OTP.")
+                    elif len(new_pwd1) < 6: 
+                        st.error("Password must be at least 6 characters.")
+                    elif new_pwd1 != new_pwd2: 
+                        st.error("Passwords do not match.")
+                    else:
+                        with st.spinner("Updating password securely..."):
+                            hashed_pw = hashlib.sha256(new_pwd1.encode()).hexdigest()
+                            success = update_user_password_in_gsheets(st.session_state.reset_email, hashed_pw)
+                            if success:
+                                st.success("Password updated successfully! Please switch to the Log In tab.")
+                                st.session_state.reset_otp = None
+                                st.session_state.reset_email = None
+                            else: 
+                                st.error("Failed to update password. Please try again.")
+            with rc2:
+                if st.button("Cancel Reset", use_container_width=True):
+                    st.session_state.reset_otp = None
+                    st.session_state.reset_email = None
+                    st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# =========================================================
-# GOOGLE SHEETS BACKEND CONFIGURATION
-# =========================================================
-@st.cache_resource
-def get_gspread_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-    return gspread.authorize(creds)
 
+# =========================================================
+# DATABASE OPERATIONS
+# =========================================================
 def load_data_from_gsheets():
     try:
         client = get_gspread_client()
@@ -125,7 +397,6 @@ def save_new_notes_to_gsheets(new_entries):
     client = get_gspread_client()
     sheet = client.open("Weekly Notes Database").sheet1
     headers = sheet.row_values(1)
-    # Additive schema support for the authenticated user's display name.
     if "Resource Name" not in headers:
         headers.append("Resource Name")
         sheet.update_cell(1, len(headers), "Resource Name")
@@ -153,32 +424,32 @@ def update_existing_note_in_gsheets(updated_entry):
 st.markdown("""
 <style>
 :root {
-    --app-bg: #f4f7fb; --surface: #ffffff; --primary: #16324f; --accent: #2563eb; --border: #dfe5ec;
+    --app-bg: #f4f7fb; --surface: #ffffff; --primary: #1e293b; --accent: #ea580c; --border: #dfe5ec;
     --text-main: #0f172a; --muted: #64748b; --radius-sm: 8px; --radius-md: 12px;
 }
 .stApp { background: var(--app-bg); }
 .block-container { max-width: 1440px !important; margin: 0 auto !important; padding-top: 1.5rem !important; padding-bottom: 2.5rem !important; }
 .stMarkdown, .stText, .stCaption, .stSelectbox label, .stMultiSelect label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important; }
-.stSelectbox label p, .stMultiSelect label p, .stTextInput label p, .stTextArea label p, .stNumberInput label p, .stDateInput label p, .stSelectbox label, .stMultiSelect label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { font-size: 15px !important; font-weight: bold !important; color: #16324f !important; letter-spacing: .25px !important; margin-bottom: 4px !important; }
+.stSelectbox label p, .stMultiSelect label p, .stTextInput label p, .stTextArea label p, .stNumberInput label p, .stDateInput label p, .stSelectbox label, .stMultiSelect label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { font-size: 15px !important; font-weight: bold !important; color: #1e293b !important; letter-spacing: .25px !important; margin-bottom: 4px !important; }
 [data-baseweb="select"] > div { background: linear-gradient(to bottom, #ffffff, #f8fafc) !important; border: 1px solid #cbd5e1 !important; box-shadow: 0 2px 4px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.04) !important; border-radius: 8px !important; min-height: 38px !important; transition: all 0.15s ease !important; }
 [data-baseweb="select"] > div:hover { border-color: #94a3b8 !important; box-shadow: 0 4px 6px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.05) !important; }
 .stSelectbox [data-baseweb="select"] span, .stMultiSelect [data-baseweb="select"] span { font-size: 15px !important; }
 .stMultiSelect [data-baseweb="tag"] { font-size: 14px !important; font-weight: bold !important; }
-.app-hero { background: linear-gradient(135deg, #132d47 0%, #1c4569 68%, #235c85 100%); border-radius: 18px; padding: 28px 32px; min-height: 110px; box-sizing: border-box; color: #ffffff !important; box-shadow: 0 12px 30px rgba(22, 50, 79, .18); margin-bottom: 16px; position: relative; overflow: hidden; isolation: isolate; }
+.app-hero { background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 18px; padding: 28px 32px; min-height: 110px; box-sizing: border-box; color: #ffffff !important; box-shadow: 0 12px 30px rgba(30, 41, 59, .18); margin-bottom: 16px; position: relative; overflow: hidden; isolation: isolate; border-top: 4px solid #ea580c; }
 .app-hero:after { content: ""; position: absolute; width: 260px; height: 260px; right: -80px; top: -120px; border-radius: 50%; background: rgba(255,255,255,.08); }
 .app-hero > * { position: relative; z-index: 2; }
-.app-hero-eyebrow { font-size: 13px; font-weight: bold; letter-spacing: 1.7px; text-transform: uppercase; color: #9ed8ff; margin-bottom: 6px; }
+.app-hero-eyebrow { font-size: 13px; font-weight: bold; letter-spacing: 1.7px; text-transform: uppercase; color: #cbd5e1; margin-bottom: 6px; }
 .app-hero-title { font-size: 34px; line-height: 1.15; font-weight: bold; letter-spacing: -.6px; margin: 0; color: #fff !important; }
-.app-hero-subtitle { margin-top: 8px; font-size: 15px; color: #d6e4f1 !important; }
+.app-hero-subtitle { margin-top: 8px; font-size: 15px; color: #f8fafc !important; }
 .stButton > button, .stDownloadButton > button { background: linear-gradient(to bottom, #ffffff, #f1f5f9) !important; border: 1px solid #cbd5e1 !important; box-shadow: 0 3px 0 #cbd5e1, 0 4px 6px rgba(0,0,0,0.05) !important; border-radius: 10px !important; color: #334155 !important; font-weight: bold !important; transition: all 0.1s ease-out !important; transform: translateY(0) !important; }
 .stButton > button:active, .stDownloadButton > button:active { transform: translateY(3px) !important; box-shadow: 0 0px 0 transparent, 0 0px 0px rgba(0,0,0,0) !important; }
-.stButton > button[kind="primary"] { background: linear-gradient(to bottom, var(--primary), #112840) !important; border-color: #0b1a2a !important; box-shadow: 0 3px 0 #0b1a2a, 0 5px 12px rgba(22, 50, 79, 0.3) !important; color: white !important; }
+.stButton > button[kind="primary"] { background: linear-gradient(to bottom, var(--accent), #c2410c) !important; border-color: #9a3412 !important; box-shadow: 0 3px 0 #9a3412, 0 5px 12px rgba(234, 88, 12, 0.3) !important; color: white !important; }
 div.element-container:has(.marker-nav1-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #eff6ff) !important; border-color: #bfdbfe !important; box-shadow: 0 3px 0 #bfdbfe, 0 4px 6px rgba(0,0,0,0.05) !important; color: #1e40af !important; }
-div.element-container:has(.marker-nav1-active) + div.element-container button { background: linear-gradient(to bottom, #3b82f6, #1d4ed8) !important; border-color: #1e40af !important; box-shadow: 0 3px 0 #1e40af, 0 4px 8px rgba(37,99,235,0.3) !important; color: #ffffff !important; }
+div.element-container:has(.marker-nav1-active) + div.element-container button { background: linear-gradient(to bottom, #1e293b, #0f172a) !important; border-color: #020617 !important; box-shadow: 0 3px 0 #020617, 0 4px 8px rgba(15,23,42,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav2-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #f0fdf4) !important; border-color: #bbf7d0 !important; box-shadow: 0 3px 0 #bbf7d0, 0 4px 6px rgba(0,0,0,0.05) !important; color: #166534 !important; }
 div.element-container:has(.marker-nav2-active) + div.element-container button { background: linear-gradient(to bottom, #10b981, #047857) !important; border-color: #064e3b !important; box-shadow: 0 3px 0 #064e3b, 0 4px 8px rgba(16,185,129,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav3-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #fffbeb) !important; border-color: #fde68a !important; box-shadow: 0 3px 0 #fde68a, 0 4px 6px rgba(0,0,0,0.05) !important; color: #b45309 !important; }
-div.element-container:has(.marker-nav3-active) + div.element-container button { background: linear-gradient(to bottom, #f59e0b, #b45309) !important; border-color: #78350f !important; box-shadow: 0 3px 0 #78350f, 0 4px 8px rgba(245,158,11,0.3) !important; color: #ffffff !important; }
+div.element-container:has(.marker-nav3-active) + div.element-container button { background: linear-gradient(to bottom, #ea580c, #c2410c) !important; border-color: #9a3412 !important; box-shadow: 0 3px 0 #9a3412, 0 4px 8px rgba(234,88,12,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav4-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #fff1f2) !important; border-color: #fecdd3 !important; box-shadow: 0 3px 0 #fecdd3, 0 4px 6px rgba(0,0,0,0.05) !important; color: #9f1239 !important; }
 div.element-container:has(.marker-nav4-active) + div.element-container button { background: linear-gradient(to bottom, #ef4444, #b91c1c) !important; border-color: #7f1d1d !important; box-shadow: 0 3px 0 #7f1d1d, 0 4px 8px rgba(239,68,68,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-send) + div.element-container button { background: linear-gradient(to bottom, #f5f3ff, #ede9fe) !important; border-color: #c4b5fd !important; box-shadow: 0 3px 0 #c4b5fd, 0 4px 6px rgba(0,0,0,0.05) !important; color: #5b21b6 !important; }
@@ -192,7 +463,7 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .section-header:before { content: ""; width: 5px; height: 22px; background: var(--accent); border-radius: 3px; }
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 12px !important; border-color: var(--border) !important; box-shadow: var(--shadow-sm) !important; background: var(--surface) !important; }
 .card-title { font-size: 17px; font-weight: bold; color: var(--primary) !important; margin-bottom: 3px; }
-.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 15px 18px; box-shadow: var(--shadow-sm); min-height: 85px; border-top: 4px solid var(--blue); transition: transform .18s ease, box-shadow .18s ease; }
+.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 15px 18px; box-shadow: var(--shadow-sm); min-height: 85px; border-top: 4px solid var(--accent); transition: transform .18s ease, box-shadow .18s ease; }
 .kpi-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .kpi-label { font-size: 12px; color: var(--muted) !important; font-weight: bold; letter-spacing: .8px; }
 .kpi-value { margin-top: 5px; font-size: 32px; line-height: 1; font-weight: bold; color: var(--primary) !important; }
@@ -204,15 +475,15 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .work-type { font-size: 13px; color: var(--muted); display:block; margin-top:2px; }
 .status-pill { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; font-size: 12px; font-weight: bold; border: 1px solid transparent; }
 .status-on-track { background:#ecfdf5; color:#16805b; border-color:#a7f3d0; }
-.status-in-progress { background:#fffbeb; color:#b7791f; border-color:#fde68a; }
+.status-in-progress { background:#fffbeb; color:#ea580c; border-color:#fde68a; }
 .status-blocked { background:#fef2f2; color:#c2413d; border-color:#fecaca; }
 .status-completed { background:#eff6ff; color:#2563eb; border-color:#bfdbfe; }
 .status-not-started { background:#f2f4f7; color:#667085; border-color:#d0d5dd; }
 .summary-box { background: #f8fafc; border-radius: 8px; color: #334155; font-size: 1.15rem; line-height: 1.6; margin-bottom: 2.5rem; padding: 1.25rem; border: 1px solid #e2e8f0; }
-.risk-box { background-color: #fef2f2; border-left: 5px solid #dc2626; padding: 1.25rem; margin-bottom: 1rem; border-radius: 6px; }
+.risk-box { background-color: #fff7ed; border-left: 5px solid #ea580c; padding: 1.25rem; margin-bottom: 1rem; border-radius: 6px; }
 .risk-title { color: #0f172a; font-size: 1.05rem; font-weight: 700; margin-bottom: 0.25rem; }
 .risk-desc { color: #334155; font-size: 0.95rem; }
-.acc-header { background: linear-gradient(90deg,#173654,#214f77); color:#fff !important; padding:9px 14px; border-radius:10px; font-size:17px; font-weight:bold; margin:13px 0 7px 0; }
+.acc-header { background: linear-gradient(90deg,#1e293b,#334155); color:#fff !important; padding:9px 14px; border-radius:10px; font-size:17px; font-weight:bold; margin:13px 0 7px 0; }
 .team-header { color:var(--primary) !important; font-size:15px; font-weight:bold; padding:5px 2px; border-bottom:2px solid #e6ebf1; margin:7px 0 5px; }
 .edit-banner { background:#eff6ff; color:#2563eb !important; border:1px solid #bfdbfe; padding:8px 11px; border-radius:9px; font-size:13px; font-weight:bold; margin-bottom:10px; }
 .block-container .stVerticalBlock { gap: .8rem !important; }
@@ -220,20 +491,18 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .action-attention { background:#fffbeb; border:1px solid #fde68a; border-left:5px solid #d97706; padding:12px 14px; border-radius:10px; margin:8px 0; }
 hr { margin: 12px 0 !important; border-color:#e6ebf1 !important; }
 
-    /* V2 enterprise refinements — additive UI only */
-    .filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
-    .filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
-    .filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
-    .filter-chip { display:inline-block; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; }
-    .health-strip { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:12px 15px; margin:8px 0 15px; }
-    .health-title { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:#64748b; font-weight:800; }
-    .health-score { font-size:25px; font-weight:800; color:#16324f; }
-    .health-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
-    .mini-insight { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; font-size:13px; color:#334155; }
-    .login-meta { text-align:center; color:#94a3b8; font-size:11px; margin-top:8px; }
-    .section-note { color:#64748b; font-size:12px; margin-top:-5px; margin-bottom:8px; }
-    .compact-row { border-bottom:1px solid #edf1f5; padding:9px 4px; }
-    .app-user { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); }
+.filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
+.filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
+.filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
+.filter-chip { display:inline-block; background:#fff7ed; color:#ea580c; border:1px solid #fdba74; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; }
+.health-strip { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:12px 15px; margin:8px 0 15px; }
+.health-title { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:#64748b; font-weight:800; }
+.health-score { font-size:25px; font-weight:800; color:#1e293b; }
+.health-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+.mini-insight { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; font-size:13px; color:#334155; }
+.login-meta { text-align:center; color:#94a3b8; font-size:11px; margin-top:8px; }
+.section-note { color:#64748b; font-size:12px; margin-top:-5px; margin-bottom:8px; }
+.compact-row { border-bottom:1px solid #edf1f5; padding:9px 4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -244,31 +513,67 @@ if 'data_synced' not in st.session_state:
     st.session_state.notes_db = load_data_from_gsheets()
     st.session_state.data_synced = True
 
-if 'project_count' not in st.session_state: st.session_state.project_count = 1
-if 'show_success' not in st.session_state: st.session_state.show_success = False
-if 'success_message' not in st.session_state: st.session_state.success_message = ""
-if 'edit_id' not in st.session_state: st.session_state.edit_id = None
-if 'nav_selection' not in st.session_state: st.session_state.nav_selection = "📋 Weekly Summary"
-if 'show_send_dialog' not in st.session_state: st.session_state.show_send_dialog = None
-if 'last_refresh_at' not in st.session_state: st.session_state.last_refresh_at = datetime.now(IST)
-if 'quick_filter' not in st.session_state: st.session_state.quick_filter = "All"
-if 'project_search' not in st.session_state: st.session_state.project_search = ""
-if 'executive_compact' not in st.session_state: st.session_state.executive_compact = False
-if 'copy_source_loaded' not in st.session_state: st.session_state.copy_source_loaded = False
+if 'project_count' not in st.session_state: 
+    st.session_state.project_count = 1
+if 'show_success' not in st.session_state: 
+    st.session_state.show_success = False
+if 'success_message' not in st.session_state: 
+    st.session_state.success_message = ""
+if 'edit_id' not in st.session_state: 
+    st.session_state.edit_id = None
+if 'nav_selection' not in st.session_state: 
+    st.session_state.nav_selection = "📋 Weekly Summary"
+if 'show_send_dialog' not in st.session_state: 
+    st.session_state.show_send_dialog = None
+if 'last_refresh_at' not in st.session_state: 
+    st.session_state.last_refresh_at = datetime.now(IST)
+if 'quick_filter' not in st.session_state: 
+    st.session_state.quick_filter = "All"
+if 'project_search' not in st.session_state: 
+    st.session_state.project_search = ""
+if 'executive_compact' not in st.session_state: 
+    st.session_state.executive_compact = False
+if 'copy_source_loaded' not in st.session_state: 
+    st.session_state.copy_source_loaded = False
 
-# Dynamically populate account and team options based on cloud data
 st.session_state.accounts_db = {}
 if st.session_state.notes_db:
     live_df = pd.DataFrame(st.session_state.notes_db)
-    for acc in live_df["Account"].unique():
-        st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].unique().tolist()
+    if "Account" in live_df.columns and "Team" in live_df.columns:
+        for acc in live_df["Account"].dropna().unique():
+            st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].unique().tolist()
 
 # =========================================================
 # HELPERS
 # =========================================================
+def current_period_label(df):
+    if df.empty: 
+        return "Current selection"
+    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
+    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
+    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
+    if len(years)==1 and len(months)==1 and len(weeks)==1: 
+        return f"{months[0]} {years[0]} · {weeks[0]}"
+    return "Current selection"
+
+def html_escape(value):
+    return html.escape("" if value is None else str(value))
+
+def safe_pdf_text(value):
+    text = "" if value is None else str(value)
+    replacements = {
+        "–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", 
+        "•":"-", "✓":"OK", "⚠":"!", "×":"x"
+    }
+    for old, new in replacements.items(): 
+        text = text.replace(old, new)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
 def get_pct_decimal(pct_str):
-    try: return float(str(pct_str).replace('%', '').strip()) / 100.0
-    except Exception: return 0.0
+    try: 
+        return float(str(pct_str).replace('%', '').strip()) / 100.0
+    except Exception: 
+        return 0.0
 
 def get_status_icon(status):
     icons = {"On Track": "●", "At Risk": "●", "Blocked": "●", "Completed": "●", "Not Started": "●"}
@@ -278,152 +583,55 @@ def render_metric_card(label, value):
     return f'<div class="kpi-card"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>'
 
 def format_badge_text(selected_list, all_options):
-    if not selected_list: return "All"
-    if len(selected_list) == len(all_options): return "All"
-    if len(selected_list) <= 2: return ", ".join(map(str, selected_list))
+    if not selected_list: 
+        return "All"
+    if len(selected_list) == len(all_options): 
+        return "All"
+    if len(selected_list) <= 2: 
+        return ", ".join(map(str, selected_list))
     return f"{len(selected_list)} selected"
 
 def parse_date(date_str):
-    if not date_str or str(date_str).strip() in ["N/A", "None", ""]: return None
-    try: return datetime.strptime(str(date_str), "%Y-%m-%d").date()
-    except Exception: return None
-
+    if not date_str or str(date_str).strip() in ["N/A", "None", ""]: 
+        return None
+    try: 
+        return datetime.strptime(str(date_str), "%Y-%m-%d").date()
+    except Exception: 
+        return None
+    
 def pct_value(value):
-    """Return percentage as a numeric 0-100 value without raising errors."""
-    try:
+    try: 
         return max(0.0, min(100.0, float(str(value).replace("%", "").strip())))
-    except Exception:
+    except Exception: 
         return 0.0
 
 def normalize_text(value):
     return str(value or "").strip().lower()
 
+def is_blank(value):
+    return normalize_text(value) in {"", "none", "na", "n/a", "nan"}
 
 def user_can_edit_row(row):
-    """Server-side edit authorization; UI permissions are not trusted for writes."""
     role = st.session_state.get("current_role", "")
     email = normalize_text(st.session_state.get("current_email", ""))
     scopes = [normalize_text(x) for x in st.session_state.get("current_scope", "").split(",") if normalize_text(x)]
     acc_scopes = [normalize_text(x) for x in st.session_state.get("current_acc_scope", "").split(",") if normalize_text(x)]
-    row_team, row_acc, row_email = normalize_text(row.get("Team")), normalize_text(row.get("Account")), normalize_text(row.get("Resource"))
-    if role == "Admin": return True
-    if role == "Account Manager": return row_acc in scopes
-    if role == "Team Lead": return row_team in scopes and row_acc in acc_scopes
+    
+    row_team = normalize_text(row.get("Team"))
+    row_acc = normalize_text(row.get("Account"))
+    row_email = normalize_text(row.get("Resource"))
+    
+    if role == "Admin": 
+        return True
+    if role == "Account Manager": 
+        return row_acc in scopes
+    if role == "Team Lead": 
+        return row_team in scopes and row_acc in acc_scopes
     return row_email == email
 
 def row_submission_key(row):
-    return "|".join(normalize_text(row.get(k)) for k in ["Account","Team","Resource","Project / Dashboard","Year","Month","Week"])
-
-def health_score(row, as_of=None):
-    """Deterministic 0-100 project health score based only on existing fields."""
-    as_of = as_of or datetime.now(IST).date()
-    score = 100
-    status = normalize_text(row.get("Status"))
-    comp = pct_value(row.get("Completion %"))
-    due = date_from_row(row)
-    if status == "blocked": score -= 35
-    elif status == "at risk": score -= 25
-    elif status == "on hold": score -= 15
-    if due and status != "completed":
-        days = (due - as_of).days
-        if days < 0: score -= 25
-        elif days <= 7: score -= 10
-    if comp >= 100 and status != "completed": score -= 15
-    if status == "completed" and comp < 100: score -= 15
-    if is_blank(row.get("This Week Delivered")): score -= 8
-    if status in {"at risk","blocked"} and is_blank(row.get("Blocker")): score -= 7
-    if pct_value(row.get("Utilization %")) > 100: score -= 10
-    return max(0, min(100, int(score)))
-
-def health_label(score):
-    return "Healthy" if score >= 80 else ("Attention" if score >= 60 else "Critical")
-
-def delivery_bucket(row, as_of=None):
-    as_of = as_of or datetime.now(IST).date()
-    due = date_from_row(row)
-    if normalize_text(row.get("Status")) == "completed": return "Delivered"
-    if not due: return "No Date"
-    days = (due - as_of).days
-    if days < 0: return "Overdue"
-    if days <= 7: return "Next 7 Days"
-    if days <= 14: return "8–14 Days"
-    return "15+ Days"
-
-def suggested_action(row):
-    priority, reasons = classify_attention(row)
-    status = normalize_text(row.get("Status"))
-    if priority == "Critical":
-        if status == "blocked": return "Remove blocker / escalate dependency and confirm recovery date."
-        if "overdue" in " ".join(reasons).lower(): return "Confirm recovery plan and revised delivery commitment."
-        return "Review project health with owner and agree on immediate corrective action."
-    if priority == "Attention":
-        if "data quality" in " ".join(reasons).lower(): return "Correct missing or inconsistent weekly reporting fields."
-        return "Monitor closely and confirm next-week priority."
-    return "No action required."
-
-def portfolio_health(df):
-    if df.empty: return 0, Counter()
-    labels = [health_label(health_score(r)) for _, r in df.iterrows()]
-    return int(sum(health_score(r) for _, r in df.iterrows()) / len(df)), Counter(labels)
-
-def resource_utilization(df):
-    """Use the mean of project utilization values per resource, then average resources; avoids summing project percentages."""
-    if df.empty or "Resource" not in df.columns: return 0
-    vals = []
-    for _, group in df.groupby("Resource"):
-        nums = [pct_value(v) for v in group["Utilization %"]]
-        if nums: vals.append(sum(nums)/len(nums))
-    return int(round(sum(vals)/len(vals))) if vals else 0
-
-def delivery_slippage_days(row):
-    initial, updated = parse_date(row.get("Initial Delivery date")), parse_date(row.get("Updated Expected Delivery date"))
-    if initial and updated: return (updated-initial).days
-    return 0
-
-def historical_trend(df, periods=8):
-    """Build a lightweight historical trend table from the existing Year/Month/Week fields."""
-    if df.empty or not {"Year","Month","Week"}.issubset(df.columns): return pd.DataFrame()
-    month_order={m:i for i,m in enumerate(["January","February","March","April","May","June","July","August","September","October","November","December"],1)}
-    w=df.copy(); w["_y"]=pd.to_numeric(w["Year"],errors="coerce"); w["_m"]=w["Month"].map(month_order); w["_w"]=pd.to_numeric(w["Week"].astype(str).str.extract(r"(\d+)")[0],errors="coerce"); w["_p"]=w["_y"]*100+w["_m"]*10+w["_w"]; w=w.dropna(subset=["_p"]).sort_values("_p")
-    rows=[]
-    for period,g in w.groupby("_p",sort=True):
-        if len(rows)>=periods and period not in w["_p"].tail(periods).unique(): continue
-        label=f"{g['Month'].iloc[0]} {int(g['Year'].iloc[0])} · {g['Week'].iloc[0]}"
-        rows.append({"Period":label,"Projects":len(g),"Resources":g["Resource"].nunique(),"Avg Completion":round(sum(pct_value(x) for x in g["Completion %"])/max(1,len(g)),1),"Avg Utilization":resource_utilization(g),"Critical":sum(1 for _,r in g.iterrows() if classify_attention(r)[0]=="Critical"),"Overdue":sum(1 for _,r in g.iterrows() if delivery_bucket(r)=="Overdue")})
-    return pd.DataFrame(rows[-periods:])
-
-def current_period_label(df):
-    if df.empty: return "Current selection"
-    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
-    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
-    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
-    if len(years)==1 and len(months)==1 and len(weeks)==1: return f"{months[0]} {years[0]} · {weeks[0]}"
-    return "Current selection"
-
-def write_audit_event(action, row_id, old_row=None, new_row=None):
-    """Best-effort audit trail in a separate Google Sheet tab; never blocks normal save/update."""
-    try:
-        client = get_gspread_client()
-        spreadsheet = client.open("Weekly Notes Database")
-        try:
-            sheet = spreadsheet.worksheet("Audit Log")
-        except Exception:
-            sheet = spreadsheet.add_worksheet(title="Audit Log", rows=1000, cols=8)
-            sheet.append_row(["Timestamp","Action","Record ID","User Name","User Email","Role","Before","After"])
-        sheet.append_row([datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"), action, str(row_id), st.session_state.get("current_name",""), st.session_state.get("current_email",""), st.session_state.get("current_role",""), str(old_row or {}), str(new_row or {})])
-    except Exception:
-        pass
-
-def is_blank(value):
-    return normalize_text(value) in {"", "none", "na", "n/a", "nan"}
-
-def row_project_key(row):
-    """Stable project identity for week-over-week comparisons."""
-    return "|".join([
-        normalize_text(row.get("Account")),
-        normalize_text(row.get("Team")),
-        normalize_text(row.get("Resource")),
-        normalize_text(row.get("Project / Dashboard")),
+    return "|".join(normalize_text(row.get(k)) for k in [
+        "Account","Team","Resource","Project / Dashboard","Year","Month","Week"
     ])
 
 def date_from_row(row):
@@ -432,53 +640,110 @@ def date_from_row(row):
 def delivery_state(row, as_of=None):
     as_of = as_of or datetime.now(IST).date()
     status = normalize_text(row.get("Status"))
-    if status == "completed":
+    if status == "completed": 
         return "Delivered"
     due = date_from_row(row)
-    if not due:
+    if not due: 
         return "No Date"
+    
     delta = (due - as_of).days
-    if delta < 0:
+    if delta < 0: 
         return f"Overdue {abs(delta)}d"
-    if delta <= 7:
+    if delta <= 7: 
         return f"Due in {delta}d"
     return "Upcoming"
+
+def delivery_bucket(row, as_of=None):
+    as_of = as_of or datetime.now(IST).date()
+    due = date_from_row(row)
+    if normalize_text(row.get("Status")) == "completed": 
+        return "Delivered"
+    if not due: 
+        return "No Date"
+    
+    days = (due - as_of).days
+    if days < 0: 
+        return "Overdue"
+    if days <= 7: 
+        return "Next 7 Days"
+    if days <= 14: 
+        return "8–14 Days"
+    return "15+ Days"
+
+def health_score(row, as_of=None):
+    as_of = as_of or datetime.now(IST).date()
+    score = 100
+    status = normalize_text(row.get("Status"))
+    comp = pct_value(row.get("Completion %"))
+    due = date_from_row(row)
+    
+    if status == "blocked": score -= 35
+    elif status == "at risk": score -= 25
+    elif status == "on hold": score -= 15
+    
+    if due and status != "completed":
+        days = (due - as_of).days
+        if days < 0: score -= 25
+        elif days <= 7: score -= 10
+        
+    if comp >= 100 and status != "completed": score -= 15
+    if status == "completed" and comp < 100: score -= 15
+    if is_blank(row.get("This Week Delivered")): score -= 8
+    if status in {"at risk","blocked"} and is_blank(row.get("Blocker")): score -= 7
+    if pct_value(row.get("Utilization %")) > 100: score -= 10
+    
+    return max(0, min(100, int(score)))
+
+def health_label(score):
+    return "Healthy" if score >= 80 else ("Attention" if score >= 60 else "Critical")
 
 def data_quality_flags(row):
     flags = []
     status = normalize_text(row.get("Status"))
     comp = pct_value(row.get("Completion %"))
     due = date_from_row(row)
-    if status == "completed" and comp < 100:
+    
+    if status == "completed" and comp < 100: 
         flags.append("Completed but completion is below 100%")
-    if comp >= 100 and status != "completed":
+    if comp >= 100 and status != "completed": 
         flags.append("Completion is 100% but status is not Completed")
-    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")):
+    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")): 
         flags.append("Risk/blocked status without a blocker explanation")
+        
     start = parse_date(row.get("Start date"))
     initial = parse_date(row.get("Initial Delivery date"))
-    if start and initial and initial < start: flags.append("Initial delivery date is before start date")
-    if start and due and due < start: flags.append("Updated delivery date is before start date")
-    if status == "cancelled" and comp > 0: flags.append("Cancelled item has non-zero completion")
-    if status == "not started" and comp > 0: flags.append("Not Started item has non-zero completion")
-    if status == "completed" and due and due > datetime.now(IST).date(): flags.append("Completed item has a future delivery date")
-    if due and status != "completed" and due < datetime.now(IST).date():
+    
+    if start and initial and initial < start: 
+        flags.append("Initial delivery date is before start date")
+    if start and due and due < start: 
+        flags.append("Updated delivery date is before start date")
+    if status == "cancelled" and comp > 0: 
+        flags.append("Cancelled item has non-zero completion")
+    if status == "not started" and comp > 0: 
+        flags.append("Not Started item has non-zero completion")
+    if status == "completed" and due and due > datetime.now(IST).date(): 
+        flags.append("Completed item has a future delivery date")
+    if due and status != "completed" and due < datetime.now(IST).date(): 
         flags.append("Expected delivery date is overdue")
-    if is_blank(row.get("This Week Delivered")):
+    if is_blank(row.get("This Week Delivered")): 
         flags.append("No weekly delivery update reported")
+        
     util = pct_value(row.get("Utilization %"))
-    if util > 100: flags.append("Utilization exceeds 100%")
-    if is_blank(row.get("Business Owner")): flags.append("Business owner is missing")
-    if is_blank(row.get("Next Week Priority")): flags.append("Next-week priority is missing")
+    if util > 100: 
+        flags.append("Utilization exceeds 100%")
+    if is_blank(row.get("Business Owner")): 
+        flags.append("Business owner is missing")
+    if is_blank(row.get("Next Week Priority")): 
+        flags.append("Next-week priority is missing")
+        
     return flags
 
 def classify_attention(row, as_of=None):
-    """Return a priority label and reasons. Existing statuses remain authoritative."""
     as_of = as_of or datetime.now(IST).date()
     status = normalize_text(row.get("Status"))
     reasons = []
     priority = "Normal"
-
+    
     if status == "blocked":
         priority = "Critical"
         reasons.append("Blocked")
@@ -488,7 +753,7 @@ def classify_attention(row, as_of=None):
     elif status == "on hold":
         priority = "Attention"
         reasons.append("On Hold")
-
+        
     due = date_from_row(row)
     if due and status != "completed":
         days = (due - as_of).days
@@ -496,63 +761,159 @@ def classify_attention(row, as_of=None):
             priority = "Critical"
             reasons.append(f"Overdue by {abs(days)} day(s)")
         elif days <= 7:
-            if priority == "Normal":
+            if priority == "Normal": 
                 priority = "Attention"
             reasons.append(f"Due in {days} day(s)")
-
+            
     dq = data_quality_flags(row)
     if dq:
-        if priority == "Normal":
+        if priority == "Normal": 
             priority = "Attention"
         reasons.extend(dq)
-
+        
     return priority, reasons
 
-def get_latest_prior_week(df, selected_year=None, selected_month=None, selected_week=None):
-    """Find the immediately preceding reported week using the app's Year/Month/Week fields."""
-    if df.empty or not {"Year", "Month", "Week"}.issubset(df.columns):
-        return pd.DataFrame()
+def suggested_action(row):
+    priority, reasons = classify_attention(row)
+    status = normalize_text(row.get("Status"))
+    
+    if priority == "Critical":
+        if status == "blocked": 
+            return "Remove blocker / escalate dependency and confirm recovery date."
+        if "overdue" in " ".join(reasons).lower(): 
+            return "Confirm recovery plan and revised delivery commitment."
+        return "Review project health with owner and agree on immediate corrective action."
+        
+    if priority == "Attention":
+        if "data quality" in " ".join(reasons).lower(): 
+            return "Correct missing or inconsistent weekly reporting fields."
+        return "Monitor closely and confirm next-week priority."
+        
+    return "No action required."
 
+def portfolio_health(df):
+    if df.empty: 
+        return 0, Counter()
+    labels = [health_label(health_score(r)) for _, r in df.iterrows()]
+    return int(sum(health_score(r) for _, r in df.iterrows()) / len(df)), Counter(labels)
+
+def resource_utilization(df):
+    if df.empty or "Resource" not in df.columns: 
+        return 0
+    vals = []
+    for _, group in df.groupby("Resource"):
+        nums = [pct_value(v) for v in group["Utilization %"]]
+        if nums: 
+            vals.append(sum(nums)/len(nums))
+    return int(round(sum(vals)/len(vals))) if vals else 0
+
+def delivery_slippage_days(row):
+    initial = parse_date(row.get("Initial Delivery date"))
+    updated = parse_date(row.get("Updated Expected Delivery date"))
+    if initial and updated: 
+        return (updated-initial).days
+    return 0
+
+def historical_trend(df, periods=8):
+    if df.empty or not {"Year","Month","Week"}.issubset(df.columns): 
+        return pd.DataFrame()
+        
+    month_order={m:i for i,m in enumerate([
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
+    ],1)}
+    
+    w = df.copy()
+    w["_y"] = pd.to_numeric(w["Year"], errors="coerce")
+    w["_m"] = w["Month"].map(month_order)
+    w["_w"] = pd.to_numeric(w["Week"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
+    w["_p"] = w["_y"]*100 + w["_m"]*10 + w["_w"]
+    w = w.dropna(subset=["_p"]).sort_values("_p")
+    
+    rows = []
+    for period, g in w.groupby("_p", sort=True):
+        if len(rows) >= periods and period not in w["_p"].tail(periods).unique(): 
+            continue
+        label = f"{g['Month'].iloc[0]} {int(g['Year'].iloc[0])} · {g['Week'].iloc[0]}"
+        rows.append({
+            "Period": label,
+            "Projects": len(g),
+            "Resources": g["Resource"].nunique(),
+            "Avg Completion": round(sum(pct_value(x) for x in g["Completion %"])/max(1,len(g)), 1),
+            "Avg Utilization": resource_utilization(g),
+            "Critical": sum(1 for _,r in g.iterrows() if classify_attention(r)[0]=="Critical"),
+            "Overdue": sum(1 for _,r in g.iterrows() if delivery_bucket(r)=="Overdue")
+        })
+    return pd.DataFrame(rows[-periods:])
+
+def write_audit_event(action, row_id, old_row=None, new_row=None):
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open("Weekly Notes Database")
+        try: 
+            sheet = spreadsheet.worksheet("Audit Log")
+        except Exception:
+            sheet = spreadsheet.add_worksheet(title="Audit Log", rows=1000, cols=8)
+            sheet.append_row(["Timestamp","Action","Record ID","User Name","User Email","Role","Before","After"])
+        
+        sheet.append_row([
+            datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"), 
+            action, 
+            str(row_id), 
+            st.session_state.get("current_name",""), 
+            st.session_state.get("current_email",""), 
+            st.session_state.get("current_role",""), 
+            str(old_row or {}), 
+            str(new_row or {})
+        ])
+    except Exception: 
+        pass
+
+def get_latest_prior_week(df, selected_year=None, selected_month=None, selected_week=None):
+    if df.empty or not {"Year", "Month", "Week"}.issubset(df.columns): 
+        return pd.DataFrame()
+        
     work = df.copy()
     month_order = {m: i for i, m in enumerate([
         "January","February","March","April","May","June",
         "July","August","September","October","November","December"
     ], 1)}
+    
     work["_year"] = pd.to_numeric(work["Year"], errors="coerce")
     work["_month_num"] = work["Month"].map(month_order)
-    work["_week_num"] = pd.to_numeric(
-        work["Week"].astype(str).str.extract(r"(\d+)")[0], errors="coerce"
-    )
+    work["_week_num"] = pd.to_numeric(work["Week"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
     work["_period"] = work["_year"] * 100 + work["_month_num"] * 10 + work["_week_num"]
-
-    if selected_year is None or selected_month is None or selected_week is None:
+    
+    if selected_year is None or selected_month is None or selected_week is None: 
         return pd.DataFrame()
-
+        
     current_month_num = month_order.get(str(selected_month))
     current_week_num_match = re.search(r"(\d+)", str(selected_week))
     current_week_num = int(current_week_num_match.group(1)) if current_week_num_match else None
-    if current_month_num is None or current_week_num is None:
+    
+    if current_month_num is None or current_week_num is None: 
         return pd.DataFrame()
-
+        
     current_period = int(selected_year) * 100 + current_month_num * 10 + current_week_num
     prior = work[work["_period"] < current_period]
-    if prior.empty:
+    
+    if prior.empty: 
         return pd.DataFrame()
+        
     prior_period = prior["_period"].max()
     return prior[prior["_period"] == prior_period].drop(columns=["_year","_month_num","_week_num","_period"], errors="ignore")
 
 def compare_current_to_prior(current_df, prior_df):
-    """Create project-level movement signals without changing source data."""
-    if current_df.empty or prior_df.empty:
+    if current_df.empty or prior_df.empty: 
         return pd.DataFrame()
-    prior_map = {}
-    for _, row in prior_df.iterrows():
-        prior_map[row_project_key(row)] = row
-
+        
+    prior_map = {row_project_key(row): row for _, row in prior_df.iterrows()}
     records = []
+    
     for _, row in current_df.iterrows():
         key = row_project_key(row)
         prev = prior_map.get(key)
+        
         if prev is None:
             movement = "New"
             comp_delta = None
@@ -564,59 +925,60 @@ def compare_current_to_prior(current_df, prior_df):
             prev_status = str(prev.get("Status", ""))
             curr_status = str(row.get("Status", ""))
             status_change = f"{prev_status} → {curr_status}" if prev_status != curr_status else "No status change"
-            if comp_delta >= 10:
+            
+            if comp_delta >= 10: 
                 movement = "Improved"
-            elif comp_delta <= -10:
+            elif comp_delta <= -10: 
                 movement = "Declined"
-            else:
+            else: 
                 movement = "Stable"
+                
         records.append({
-            "Project / Dashboard": row.get("Project / Dashboard", ""),
-            "Resource": row.get("Resource", ""),
-            "Movement": movement,
-            "Completion Δ": comp_delta,
-            "Utilization Δ": util_delta,
-            "Status Change": status_change,
+            "Project / Dashboard": row.get("Project / Dashboard", ""), 
+            "Resource": row.get("Resource", ""), 
+            "Movement": movement, 
+            "Completion Δ": comp_delta, 
+            "Utilization Δ": util_delta, 
+            "Status Change": status_change
         })
     return pd.DataFrame(records)
 
-def html_escape(value):
-    return html.escape("" if value is None else str(value))
-
 def build_action_items(dataframe):
     items = []
-    if dataframe.empty:
+    if dataframe.empty: 
         return items
+        
     for _, row in dataframe.iterrows():
         priority, reasons = classify_attention(row)
         if priority != "Normal":
             items.append({
-                "Priority": priority,
-                "Project / Dashboard": row.get("Project / Dashboard", ""),
-                "Account": row.get("Account", ""),
-                "Team": row.get("Team", ""),
-                "Resource": row.get("Resource", ""),
-                "Status": row.get("Status", ""),
-                "Delivery": delivery_state(row),
-                "Reason": "; ".join(dict.fromkeys(reasons)),
-                "Recommended Action": suggested_action(row),
+                "Priority": priority, 
+                "Project / Dashboard": row.get("Project / Dashboard", ""), 
+                "Account": row.get("Account", ""), 
+                "Team": row.get("Team", ""), 
+                "Resource": row.get("Resource", ""), 
+                "Status": row.get("Status", ""), 
+                "Delivery": delivery_state(row), 
+                "Reason": "; ".join(dict.fromkeys(reasons)), 
+                "Recommended Action": suggested_action(row)
             })
+            
     rank = {"Critical": 0, "Attention": 1, "Normal": 2}
     items.sort(key=lambda x: (rank.get(x["Priority"], 9), x["Project / Dashboard"]))
     return items
 
 def refresh_cloud_data(show_message=True):
-    """Explicitly refresh Google Sheets data while preserving the existing data model."""
     with st.spinner("Refreshing data from Google Sheets..."):
         latest = load_data_from_gsheets()
+        
     if latest:
         st.session_state.notes_db = latest
         st.session_state.data_synced = True
-        if show_message:
+        if show_message: 
             st.success(f"Data refreshed successfully — {len(latest)} record(s) loaded.")
-    else:
-        # Keep existing data if the refresh failed/returned empty.
+    else: 
         st.warning("Refresh returned no records. Existing session data was retained.")
+        
     st.session_state.accounts_db = {}
     if st.session_state.notes_db:
         live_df = pd.DataFrame(st.session_state.notes_db)
@@ -624,466 +986,560 @@ def refresh_cloud_data(show_message=True):
             for acc in live_df["Account"].dropna().unique():
                 st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].dropna().unique().tolist()
 
-def safe_pdf_text(value):
-    text = "" if value is None else str(value)
-    replacements = {"–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", "•":"-", "✓":"OK", "⚠":"!", "×":"x"}
-    for old, new in replacements.items(): text = text.replace(old, new)
-    return text.encode("latin-1", "replace").decode("latin-1")
+# =========================================================
+# REPORT GENERATORS (HTML Email, PDF, Excel)
+# =========================================================
+def generate_html_email_body(df, report_title):
+    total_projects = len(df)
+    delivered = int((df["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not df.empty else 0
+    avg_comp = int(df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not df.empty else 0
+    risks = int(((df["Status"].isin(["At Risk", "Blocked"])) | (df["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not df.empty else 0
+    date_str = datetime.now(IST).strftime("%d %b %Y")
 
-def _report_metrics(dataframe):
-    """Single source of truth for leadership report metrics."""
-    data = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
-    if data.empty:
-        return {
-            "projects": 0, "resources": 0, "updates": 0, "completion": 0,
-            "utilization": 0, "risks": 0, "overdue": 0, "due_7": 0,
-            "due_14": 0, "due_15": 0, "delivered": 0, "health": 0,
-            "health_label": "No Data", "health_counts": {}, "actions": []
-        }
-    projects = len(data)
-    resources = data.get("Resource", pd.Series(dtype=str)).replace("", pd.NA).nunique(dropna=True)
-    updates = int(data.get("This Week Delivered", pd.Series(dtype=str)).fillna("").astype(str).str.strip().ne("").sum())
-    completion = int(round(data.get("Completion %", pd.Series(dtype=str)).apply(pct_value).mean())) if "Completion %" in data else 0
-    utilization = resource_utilization(data) if "Resource" in data else 0
-    risks = int(((data.get("Status", pd.Series(dtype=str)).isin(["At Risk", "Blocked"])) | data.get("Blocker", pd.Series(dtype=str)).fillna("").astype(str).str.strip().ne("")).sum())
-    buckets = Counter(delivery_bucket(r) for _, r in data.iterrows())
-    health, health_counts = portfolio_health(data)
-    actions = build_action_items(data)
-    return {
-        "projects": projects, "resources": int(resources), "updates": updates,
-        "completion": completion, "utilization": int(utilization), "risks": risks,
-        "overdue": buckets.get("Overdue", 0), "due_7": buckets.get("Next 7 Days", 0),
-        "due_14": buckets.get("8–14 Days", 0), "due_15": buckets.get("15+ Days", 0),
-        "delivered": buckets.get("Delivered", 0), "health": int(health),
-        "health_label": health_label(health), "health_counts": health_counts,
-        "actions": actions
-    }
+    accounts = list(df["Account"].dropna().unique()) if "Account" in df else []
+    teams = list(df["Team"].dropna().unique()) if "Team" in df else []
+    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
+    team_str = teams[0] if len(teams) == 1 else "Summary"
+    account_team_str = html_escape(f"{acc_str} - {team_str}")
 
+    table_rows = ""
+    for _, row in df.iterrows():
+        proj = html_escape(row.get("Project / Dashboard", ""))
+        owner = html_escape(row.get("Business Owner", ""))
+        
+        raw_name = str(row.get("Resource Name", "")).strip()
+        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
+            res = html_escape(raw_name)
+        else:
+            email_val = str(row.get("Resource", "")).strip()
+            res = html_escape(email_val.split('@')[0].replace('.', ' ').title())
+            
+        status = html_escape(row.get("Status", "On Track"))
+        comp = int(pct_value(row.get("Completion %")))
+        due = html_escape(row.get("Updated Expected Delivery date", "N/A"))
+        
+        if status == "Completed": status_color = "#16a34a"
+        elif status in ["At Risk", "In Progress"]: status_color = "#ea580c"
+        elif status == "Blocked": status_color = "#dc2626"
+        else: status_color = "#64748b"
 
-def _leadership_takeaway(dataframe, metrics):
-    """Create a concise, deterministic leadership narrative from report data."""
-    if metrics["projects"] == 0:
-        return "No project updates are available for the selected reporting period."
-    attention = metrics["health_counts"].get("Attention", 0) + metrics["health_counts"].get("Critical", 0)
-    parts = [
-        f"The portfolio currently covers {metrics['projects']} initiative(s) across {metrics['resources']} resource(s), with {metrics['updates']} weekly update(s) submitted.",
-        f"Average initiative completion is {metrics['completion']}% and portfolio health is {metrics['health']}/100 ({metrics['health_label']})."
-    ]
-    if metrics["overdue"]:
-        parts.append(f"{metrics['overdue']} initiative(s) are overdue and should remain under active delivery review.")
-    elif metrics["due_7"]:
-        parts.append(f"{metrics['due_7']} initiative(s) are due within the next 7 days, making near-term delivery the primary focus.")
-    if attention:
-        parts.append(f"{attention} item(s) require management attention based on status, delivery timing or reported blockers.")
+        table_rows += f"""
+        <tr>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
+                <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
+            </td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{res}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
+                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}%</div>
+                <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
+                    <div style="background-color: {status_color}; width: {comp}%; height: 100%;"></div>
+                </div>
+            </td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
+        </tr>
+        """
+
+    highlights_html = ""
+    action_items = build_action_items(df)
+    critical_items = [x for x in action_items if x["Priority"] == "Critical"]
+    
+    if critical_items:
+        for item in critical_items[:4]:
+            highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item['Project / Dashboard'])}:</strong> {html_escape(item['Reason'])}. <em>Action: {html_escape(item['Recommended Action'])}</em></li>"""
     else:
-        parts.append("No material management-attention items were identified from the selected updates.")
-    return " ".join(parts)
+        recent_updates = df[df["This Week Delivered"].astype(str).str.strip() != ""].head(4)
+        if not recent_updates.empty:
+            for _, row in recent_updates.iterrows():
+                highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row.get('Project / Dashboard', 'N/A'))}:</strong> {html_escape(row.get('This Week Delivered', ''))}</li>"""
+        else:
+            highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
+            
+    logo_src = "cid:factspan_logo" if os.path.exists("logo.png") else EMAIL_LOGO_URL
 
-
-def _report_period_text(dataframe, fallback="Current Reporting Period"):
-    if dataframe is None or dataframe.empty:
-        return fallback
-    years = dataframe["Year"].dropna().astype(str).unique().tolist() if "Year" in dataframe else []
-    months = dataframe["Month"].dropna().astype(str).unique().tolist() if "Month" in dataframe else []
-    weeks = dataframe["Week"].dropna().astype(str).unique().tolist() if "Week" in dataframe else []
-    if len(years) == len(months) == len(weeks) == 1:
-        return f"{months[0]} {years[0]} · {weeks[0]}"
-    return fallback
-
-
-def _pdf_text(value, max_chars=None):
-    text = safe_pdf_text(value if value is not None else "")
-    if max_chars and len(text) > max_chars:
-        return text[:max_chars - 1].rstrip() + "…"
-    return text
-
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            @media only screen and (max-width: 600px) {{
+                .email-container {{ width: 100% !important; padding: 0 !important; }}
+                .mobile-stack {{ display: block !important; width: 100% !important; padding: 10px 0 !important; text-align: center !important; }}
+                .mobile-hide {{ display: none !important; }}
+                .kpi-box {{ display: block !important; width: 100% !important; margin-bottom: 10px !important; box-sizing: border-box; }}
+                .logo-img {{ margin: 0 auto !important; }}
+                .table-scroll {{ overflow-x: auto !important; display: block !important; width: 100% !important; }}
+                .responsive-table {{ min-width: 600px !important; }}
+                .footer-text {{ text-align: center !important; padding: 5px 0 !important; display: block !important; width: 100% !important; }}
+            }}
+        </style>
+    </head>
+    <body style="margin: 0; padding: 20px; background-color: #f4f7fb;">
+        <div class="email-container" style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
+                <tr>
+                    <td class="mobile-stack" width="40%" valign="middle" align="left">
+                        <img src="{logo_src}" alt="FACTSPAN" width="200" class="logo-img" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
+                    </td>
+                    <td class="mobile-stack" width="60%" align="right" valign="middle">
+                        <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
+                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
+                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
+                    </td>
+                </tr>
+            </table>
+            <div style="border-top: 4px solid #ea580c;"></div>
+            <div style="padding: 25px;">
+                <p style="color: #334155; font-size: 14px; margin-top: 0;">Hi Team,</p>
+                <p style="color: #475569; font-size: 14px; line-height: 1.6; margin-bottom: 25px;">
+                    Please find below the latest weekly progress snapshot for <strong>{account_team_str}</strong>.
+                </p>
+                <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
+                
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 25px;">
+                    <tr>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
+                            <div style="font-size: 28px; font-weight: bold; color: #1e293b; font-family: Arial, sans-serif;">{total_projects}</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
+                        </td>
+                        <td class="mobile-hide" width="2%"></td>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
+                            <div style="font-size: 28px; font-weight: bold; color: #16a34a; font-family: Arial, sans-serif;">{delivered}</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">UPDATES</div>
+                        </td>
+                        <td class="mobile-hide" width="2%"></td>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fffbeb;">
+                            <div style="font-size: 28px; font-weight: bold; color: #ea580c; font-family: Arial, sans-serif;">{avg_comp}%</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">COMPLETION</div>
+                        </td>
+                        <td class="mobile-hide" width="2%"></td>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fef2f2;">
+                            <div style="font-size: 28px; font-weight: bold; color: #dc2626; font-family: Arial, sans-serif;">{risks}</div>
+                            <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">RISKS</div>
+                        </td>
+                    </tr>
+                </table>
+                
+                <div class="table-scroll">
+                    <table class="responsive-table" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px;">
+                        <thead>
+                            <tr style="background-color: #1e293b;">
+                                <th align="left" width="30%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">PROJECT / OWNER</th>
+                                <th align="left" width="20%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">RESOURCE</th>
+                                <th align="left" width="25%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">DELIVERY PROGRESS</th>
+                                <th align="left" width="15%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">TARGET DATE</th>
+                                <th align="left" width="10%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">STATUS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {table_rows}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px; margin-bottom: 30px;">
+                    <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
+                    <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.6;">
+                        {highlights_html}
+                    </ul>
+                </div>
+            </div>
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #1e293b; padding: 15px 25px;">
+                <tr>
+                    <td class="footer-text" align="left" style="color: #f1f5f9; font-size: 11px;">
+                        Factspan &bull; {account_team_str}
+                    </td>
+                    <td class="footer-text" align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">
+                        Staying Relevant and Ahead through Fluid Intelligence
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </body>
+    </html>
+    """
+    return html_body
 
 def create_pdf_report(dataframe, header_title):
-    """Production-grade leadership PDF. Existing report data/capabilities are retained; presentation is upgraded."""
-    if not FPDF_AVAILABLE:
-        return None
+    if not FPDF_AVAILABLE: return None
 
-    data = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
-    metrics = _report_metrics(data)
-    takeaway = _leadership_takeaway(data, metrics)
-    period = _report_period_text(data, header_title)
+    accounts = list(dataframe["Account"].dropna().unique()) if "Account" in dataframe else []
+    teams = list(dataframe["Team"].dropna().unique()) if "Team" in dataframe else []
+    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
+    team_str = teams[0] if len(teams) == 1 else "Summary"
+    account_team_str = f"{acc_str} - {team_str}"
+    date_str = datetime.now(IST).strftime("%d %b %Y, %I:%M %p")
 
-    class LeadershipPDF(FPDF):
-        NAVY = (22, 50, 79)
-        ORANGE = (239, 127, 34)
-        BLUE = (47, 96, 150)
-        TEXT = (48, 61, 79)
-        MUTED = (102, 112, 133)
-        BORDER = (220, 226, 234)
-        LIGHT = (247, 249, 252)
-        GREEN = (35, 133, 98)
-        RED = (190, 68, 63)
-        AMBER = (190, 126, 32)
+    class ReportPDF(FPDF):
+        def header(self):
+            if os.path.exists("logo.png"):
+                try: 
+                    self.image("logo.png", 15, 10, 40)
+                except Exception:
+                    self.set_text_color(30, 41, 59)
+                    self.set_font("Arial", "B", 16)
+                    self.set_xy(15, 15)
+                    self.cell(40, 10, "FACTSPAN", ln=False)
+            else:
+                self.set_text_color(30, 41, 59)
+                self.set_font("Arial", "B", 16)
+                self.set_xy(15, 15)
+                self.cell(40, 10, "FACTSPAN", ln=False)
+
+            self.set_text_color(234, 88, 12)
+            self.set_font("Arial", "B", 8)
+            self.set_xy(15, 10)
+            self.cell(180, 4, "WEEKLY PROJECT REPORT", align="R", ln=True)
+            
+            self.set_text_color(30, 41, 59)
+            self.set_font("Arial", "B", 18)
+            self.set_x(15)
+            self.cell(180, 8, safe_pdf_text(account_team_str), align="R", ln=True)
+            
+            self.set_text_color(100, 116, 139)
+            self.set_font("Arial", "", 8)
+            self.set_x(15)
+            self.cell(180, 4, safe_pdf_text(header_title), align="R", ln=True)
+            
+            self.set_x(15)
+            self.cell(180, 4, safe_pdf_text(f"Generated: {date_str}"), align="R", ln=True)
+            
+            self.set_y(32)
+            self.set_draw_color(234, 88, 12)
+            self.set_line_width(1)
+            self.line(15, 32, 195, 32)
+            self.set_line_width(0.2)
+            self.ln(5) 
 
         def footer(self):
-            self.set_y(-14)
-            self.set_draw_color(*self.BORDER)
-            self.line(15, 285, 195, 285)
-            self.set_text_color(*self.MUTED)
-            self.set_font("Arial", "", 7)
-            self.set_xy(15, 288)
-            self.cell(120, 4, "Weekly Project Report  ·  Leadership View")
-            self.cell(60, 4, f"Page {self.page_no()}", align="R")
+            self.set_y(-15)
+            self.set_draw_color(234, 88, 12)
+            self.set_line_width(0.5)
+            self.line(15, 282, 195, 282)
+            self.set_text_color(30, 41, 59)
+            self.set_font("Arial", "B", 8)
+            self.set_xy(15, 285)
+            self.cell(90, 5, safe_pdf_text(f"Factspan \x95 {account_team_str}"), align="L")
+            self.set_text_color(100, 116, 139)
+            self.set_font("Arial", "", 8)
+            self.set_xy(100, 285)
+            self.cell(95, 5, f"Page {self.page_no()}", align="R")
 
-        def masthead(self, compact=False):
-            self.set_fill_color(*self.NAVY)
-            self.rect(0, 0, 210, 38 if not compact else 25, "F")
-            self.set_text_color(*self.ORANGE)
-            self.set_font("Arial", "B", 7.5)
-            self.set_xy(15, 7)
-            self.cell(180, 4, "FACTSPAN  |  WEEKLY PROJECT MANAGEMENT")
-            self.set_text_color(255, 255, 255)
-            self.set_font("Arial", "B", 18 if not compact else 13)
-            self.set_xy(15, 13)
-            self.cell(180, 7, "WEEKLY PROJECT REPORT")
-            self.set_text_color(220, 231, 242)
-            self.set_font("Arial", "", 8.5)
-            self.set_xy(15, 23 if not compact else 19)
-            self.cell(180, 4, _pdf_text(period, 105))
-            if not compact:
-                self.set_font("Arial", "", 7)
-                self.set_xy(15, 30)
-                self.cell(180, 4, f"Generated {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}")
-
-        def section(self, title, subtitle=None):
-            if self.get_y() > 267:
-                self.add_page()
-                self.masthead(compact=True)
-                self.set_y(34)
-            y = self.get_y() + 3
-            self.set_fill_color(*self.ORANGE)
-            self.rect(15, y + 1, 2.2, 7, "F")
-            self.set_xy(21, y)
-            self.set_text_color(*self.NAVY)
-            self.set_font("Arial", "B", 12)
-            self.cell(174, 7, _pdf_text(title), ln=True)
-            if subtitle:
-                self.set_x(21)
-                self.set_text_color(*self.MUTED)
-                self.set_font("Arial", "", 7.5)
-                self.multi_cell(174, 4, _pdf_text(subtitle))
-            self.ln(1)
-
-        def card(self, x, y, w, h, label, value, accent=None):
-            self.set_fill_color(255, 255, 255)
-            self.set_draw_color(*self.BORDER)
-            self.rect(x, y, w, h, "DF")
-            self.set_fill_color(*(accent or self.BLUE))
-            self.rect(x, y, 2.2, h, "F")
-            self.set_xy(x + 6, y + 4)
-            self.set_text_color(*self.MUTED)
-            self.set_font("Arial", "B", 6.5)
-            self.cell(w - 10, 4, _pdf_text(label, 20))
-            self.set_xy(x + 6, y + 10)
-            self.set_text_color(*self.NAVY)
-            self.set_font("Arial", "B", 14)
-            self.cell(w - 10, 8, _pdf_text(value, 18))
-
-        def wrapped_row(self, cells, widths, fills, fonts=None, colors=None, line_h=4.3, min_h=8):
-            # Calculate row height from wrapped text without truncating business content.
-            heights = []
-            for i, text in enumerate(cells):
-                self.set_font(*(fonts[i] if fonts else ("Arial", "", 7.3)))
-                raw = _pdf_text(text)
-                words = raw.split()
-                lines = 1
-                current = ""
-                for word in words:
-                    candidate = (current + " " + word).strip()
-                    if self.get_string_width(candidate) <= widths[i] - 4:
-                        current = candidate
-                    else:
-                        lines += 1
-                        current = word
-                heights.append(max(min_h, lines * line_h + 3))
-            row_h = min(max(8, max(heights)), 26)
-            if self.get_y() + row_h > 277:
-                self.add_page(); self.masthead(compact=True); self.set_y(34)
-                return False
-            x0, y0 = 15, self.get_y()
-            for i, text in enumerate(cells):
-                self.set_xy(x0, y0)
-                self.set_fill_color(*(fills[i] if fills else (255,255,255)))
-                self.set_draw_color(*self.BORDER)
-                self.rect(x0, y0, widths[i], row_h, "DF")
-                self.set_text_color(*(colors[i] if colors else self.TEXT))
-                self.set_font(*(fonts[i] if fonts else ("Arial", "", 7.3)))
-                self.multi_cell(widths[i], line_h, _pdf_text(text), border=0, align="L", fill=False)
-                x0 += widths[i]
-            self.set_y(y0 + row_h)
-            return True
-
-    pdf = LeadershipPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf = ReportPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(15, 15, 15)
+    pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
-    pdf.masthead()
-    pdf.set_y(47)
 
-    # Executive pulse
-    box_y = pdf.get_y()
-    card_w, gap = 34.5, 2.75
-    cards = [
-        ("INITIATIVES", metrics["projects"], pdf.BLUE),
-        ("RESOURCES", metrics["resources"], pdf.BLUE),
-        ("UPDATES", metrics["updates"], pdf.ORANGE),
-        ("AVG COMPLETION", f"{metrics['completion']}%", pdf.GREEN),
-        ("HEALTH", f"{metrics['health']}/100", pdf.RED if metrics["health"] < 70 else (pdf.AMBER if metrics["health"] < 85 else pdf.GREEN)),
-    ]
-    for i, (label, value, accent) in enumerate(cards):
-        pdf.card(15 + i * (card_w + gap), box_y, card_w, 23, label, value, accent)
-    pdf.set_y(box_y + 30)
+    total_projects = len(dataframe)
+    total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
+    delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
+    avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
+    risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
 
-    pdf.section("Leadership Takeaway", "A concise portfolio-level interpretation of the selected weekly updates.")
-    pdf.set_fill_color(*pdf.LIGHT); pdf.set_draw_color(*pdf.BORDER)
-    y = pdf.get_y(); pdf.rect(15, y, 180, 28, "DF")
-    pdf.set_xy(21, y + 5); pdf.set_text_color(*pdf.TEXT); pdf.set_font("Arial", "", 9.2)
-    pdf.multi_cell(168, 5.2, _pdf_text(takeaway))
-    pdf.set_y(y + 33)
+    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
+    box_w = 33; gap = 3.75; y = 42
+    
+    for i, (label, value) in enumerate(kpis):
+        x = 15 + i * (box_w + gap)
+        pdf.set_fill_color(248, 250, 252)
+        pdf.set_draw_color(226, 232, 240)
+        pdf.rect(x, y, box_w, 24, "DF")
+        
+        pdf.set_text_color(100, 116, 139)
+        pdf.set_font("Arial", "B", 6.8)
+        pdf.set_xy(x, y + 4)
+        pdf.cell(box_w, 4, safe_pdf_text(label), align="C")
+        
+        pdf.set_text_color(30, 41, 59)
+        pdf.set_font("Arial", "B", 15)
+        pdf.set_xy(x, y + 10)
+        pdf.cell(box_w, 8, safe_pdf_text(str(value)), align="C")
+        
+    pdf.set_y(y + 32)
 
-    pdf.section("Portfolio Health", "Health combines project status, delivery timing, completion and reported blockers.")
-    health_items = [
-        ("Healthy", metrics["health_counts"].get("Healthy", 0), pdf.GREEN),
-        ("Attention", metrics["health_counts"].get("Attention", 0), pdf.AMBER),
-        ("Critical", metrics["health_counts"].get("Critical", 0), pdf.RED),
-    ]
-    x = 15
-    for label, value, accent in health_items:
-        pdf.set_fill_color(255,255,255); pdf.set_draw_color(*pdf.BORDER); pdf.rect(x, pdf.get_y(), 57, 18, "DF")
-        pdf.set_fill_color(*accent); pdf.rect(x, pdf.get_y(), 3, 18, "F")
-        pdf.set_xy(x+7, pdf.get_y()+4); pdf.set_text_color(*pdf.MUTED); pdf.set_font("Arial","B",7); pdf.cell(32,4,label)
-        pdf.set_xy(x+39, pdf.get_y()+0); pdf.set_text_color(*pdf.NAVY); pdf.set_font("Arial","B",12); pdf.cell(12,7,str(value),align="R")
-        x += 61.5
-    pdf.set_y(pdf.get_y()+24)
+    def section(title):
+        pdf.ln(5)
+        y0 = pdf.get_y()
+        pdf.set_fill_color(37, 99, 235)
+        pdf.rect(15, y0 + 1, 2.5, 7, "F")
+        pdf.set_xy(19, y0)
+        pdf.set_text_color(22, 50, 79)
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(170, 8, safe_pdf_text(title), ln=True)
+        pdf.ln(1)
 
-    pdf.section("Delivery Outlook", "Near-term delivery exposure based on the latest expected delivery dates.")
-    outlook = [("Overdue", metrics["overdue"], pdf.RED), ("Next 7 Days", metrics["due_7"], pdf.ORANGE), ("8–14 Days", metrics["due_14"], pdf.AMBER), ("15+ Days", metrics["due_15"], pdf.BLUE), ("Delivered", metrics["delivered"], pdf.GREEN)]
-    for i,(label,value,accent) in enumerate(outlook):
-        x = 15 + i*36
-        pdf.set_fill_color(*pdf.LIGHT); pdf.set_draw_color(*pdf.BORDER); pdf.rect(x,pdf.get_y(),33,18,"DF")
-        pdf.set_text_color(*accent); pdf.set_font("Arial","B",11); pdf.set_xy(x+3,pdf.get_y()+3); pdf.cell(27,6,str(value),align="C")
-        pdf.set_text_color(*pdf.MUTED); pdf.set_font("Arial","B",6.2); pdf.set_xy(x+2,pdf.get_y()+11); pdf.cell(29,4,_pdf_text(label,13),align="C")
-    pdf.set_y(pdf.get_y()+24)
+    section("Executive Summary")
+    pdf.set_x(15)
+    pdf.set_text_color(52, 64, 84)
+    pdf.set_font("Arial", "", 9.5)
+    summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
+               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {resource_utilization(dataframe)}%. "
+               f"There are {risks} item(s) requiring risk or blocker attention.")
+    pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
 
-    # WoW movement when a single reporting period is selected.
-    years = list(data["Year"].dropna().unique()) if "Year" in data else []
-    months = list(data["Month"].dropna().unique()) if "Month" in data else []
-    weeks = list(data["Week"].dropna().unique()) if "Week" in data else []
-    if len(years) == len(months) == len(weeks) == 1:
-        prior = get_latest_prior_week(data, years[0], months[0], weeks[0])
-        movement = compare_current_to_prior(data, prior) if not prior.empty else pd.DataFrame()
-        if not movement.empty:
-            pdf.section("What Changed WoW", "Movement in completion and utilization versus the most recent prior reported week.")
-            headers=[("Project / Dashboard",74),("Completion",29),("Utilization",29),("Movement",48)]
-            fills=[(231,238,246)]*4
-            pdf.wrapped_row([h for h,_ in headers],[w for _,w in headers],fills,fonts=[("Arial","B",7.1)]*4,colors=[pdf.NAVY]*4)
-            for idx,(_,r) in enumerate(movement.iterrows()):
-                row=[r.get("Project / Dashboard",""),r.get("Current Completion","") ,r.get("Current Utilization","") ,r.get("Movement","")]
-                pdf.wrapped_row(row,[74,29,29,48],[(249,251,253) if idx%2 else (255,255,255)]*4)
+    section("Project Status")
+    headers = [("Project", 60, "L"), ("Resource", 28, "L"), ("Status", 28, "L"), ("Comp.", 17, "C"), ("Util.", 17, "C"), ("Expected", 30, "L")]
+    pdf.set_fill_color(231, 238, 246)
+    pdf.set_text_color(37, 54, 74)
+    pdf.set_font("Arial", "B", 7.8)
+    pdf.set_x(15)
+    
+    for label, width, al in headers: 
+        pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True, align=al)
+    pdf.ln()
+    
+    pdf.set_font("Arial", "", 8.2)
+    for ridx, (_, row) in enumerate(dataframe.iterrows()):
+        pdf.set_x(15)
+        if ridx % 2 == 1: pdf.set_fill_color(249, 251, 253)
+        else: pdf.set_fill_color(255, 255, 255)
+        
+        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]
+        
+        raw_name = str(row.get("Resource Name", "")).strip()
+        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
+            resource = safe_pdf_text(raw_name)[:20]
+        else:
+            email_val = str(row.get("Resource", "N/A")).strip()
+            resource = safe_pdf_text(email_val.split('@')[0].replace('.', ' ').title())[:20]
+            
+        status = safe_pdf_text(row.get("Status", "N/A"))[:15]
+        comp = safe_pdf_text(row.get("Completion %", "N/A"))
+        util = safe_pdf_text(row.get("Utilization %", "N/A"))
+        expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
+        
+        pdf.set_text_color(52, 64, 84)
+        pdf.cell(60, 8, project, border=1, fill=True, align="L")
+        pdf.cell(28, 8, resource, border=1, fill=True, align="L")
+        
+        if status in ("At Risk", "Blocked"): pdf.set_text_color(160, 55, 55)
+        elif status == "Completed": pdf.set_text_color(22, 128, 91)
+        
+        pdf.cell(28, 8, status, border=1, fill=True, align="L")
+        pdf.set_text_color(52, 64, 84)
+        
+        pdf.cell(17, 8, comp, border=1, fill=True, align="C")
+        pdf.cell(17, 8, util, border=1, fill=True, align="C")
+        pdf.cell(30, 8, expected, border=1, fill=True, align="L")
+        pdf.ln()
 
-    pdf.section("Portfolio Delivery", "Current project-level delivery, ownership, progress and status.")
-    headers=[("Initiative / Dashboard",57),("Owner",25),("Status",25),("Completion",20),("Util.",18),("Expected Delivery",35)]
-    pdf.wrapped_row([h for h,_ in headers],[w for _,w in headers],[(231,238,246)]*6,fonts=[("Arial","B",7)]*6,colors=[pdf.NAVY]*6)
-    for idx,(_,row) in enumerate(data.iterrows()):
-        status=str(row.get("Status","N/A")); status_color=pdf.RED if status in ("At Risk","Blocked") else (pdf.GREEN if status=="Completed" else pdf.TEXT)
-        pdf.wrapped_row([
-            row.get("Project / Dashboard","N/A"), row.get("Business Owner","N/A"), status,
-            row.get("Completion %","N/A"), row.get("Utilization %","N/A"), row.get("Updated Expected Delivery date","N/A")
-        ], [57,25,25,20,18,35], [((249,251,253) if idx%2 else (255,255,255))]*6,
-        colors=[pdf.TEXT,pdf.TEXT,status_color,pdf.TEXT,pdf.TEXT,pdf.TEXT], fonts=[("Arial","",7.1),("Arial","",7.1),("Arial","B",7.1),("Arial","B",7.1),("Arial","",7.1),("Arial","",7.1)])
+    section("Weekly Highlights")
+    for _, row in dataframe.iterrows():
+        pdf.set_x(15)
+        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))
+        delivered_text = safe_pdf_text(row.get("This Week Delivered", "None reported."))
+        pdf.set_text_color(22, 50, 79)
+        pdf.set_font("Arial", "B", 9)
+        pdf.multi_cell(180, 5, project)
+        
+        pdf.set_x(15)
+        pdf.set_text_color(71, 84, 103)
+        pdf.set_font("Arial", "", 9)
+        pdf.multi_cell(180, 5, f"Delivered: {delivered_text or 'None reported.'}")
+        pdf.ln(1.5)
 
-    # Risks / actions are separated for executive scanning.
-    pdf.section("Management Attention", "Prioritized items requiring intervention, follow-up or delivery monitoring.")
-    actions = metrics["actions"]
-    if not actions:
-        pdf.set_fill_color(241,249,245); pdf.set_draw_color(*pdf.BORDER); y=pdf.get_y(); pdf.rect(15,y,180,18,"DF")
-        pdf.set_xy(21,y+5); pdf.set_text_color(*pdf.GREEN); pdf.set_font("Arial","B",9); pdf.cell(168,5,"No management-attention items identified for this selection.")
-        pdf.set_y(y+23)
-    else:
-        headers=[("Priority",22),("Initiative",48),("Reason",52),("Recommended Action",58)]
-        pdf.wrapped_row([h for h,_ in headers],[w for _,w in headers],[(231,238,246)]*4,fonts=[("Arial","B",7)]*4,colors=[pdf.NAVY]*4)
-        for idx,item in enumerate(actions):
-            priority=item.get("Priority","")
-            pc=pdf.RED if priority=="Critical" else (pdf.AMBER if priority=="Attention" else pdf.TEXT)
-            pdf.wrapped_row([priority,item.get("Project / Dashboard",""),item.get("Reason",""),item.get("Recommended Action","")],[22,48,52,58],[(255,248,247) if priority=="Critical" else ((255,252,243) if priority=="Attention" else (255,255,255))]*4,colors=[pc,pdf.TEXT,pdf.TEXT,pdf.TEXT],fonts=[("Arial","B",7.1),("Arial","",7.1),("Arial","",7.1),("Arial","",7.1)])
-
-    pdf.section("Weekly Highlights & Next Week Priorities", "Leadership-ready summary of completed work and the immediate forward plan.")
-    for idx,(_,row) in enumerate(data.iterrows()):
-        project=_pdf_text(row.get("Project / Dashboard","N/A"),80)
-        delivered=_pdf_text(row.get("This Week Delivered","")).strip() or "No update reported."
-        next_week=_pdf_text(row.get("Next Week Priority","")).strip() or "No priority reported."
-        if pdf.get_y() > 258:
-            pdf.add_page(); pdf.masthead(compact=True); pdf.set_y(34)
-        y=pdf.get_y(); pdf.set_fill_color(*pdf.LIGHT); pdf.set_draw_color(*pdf.BORDER); pdf.rect(15,y,180,30,"DF")
-        pdf.set_xy(21,y+4); pdf.set_text_color(*pdf.NAVY); pdf.set_font("Arial","B",8.2); pdf.cell(168,4,project)
-        pdf.set_xy(21,y+10); pdf.set_text_color(*pdf.MUTED); pdf.set_font("Arial","B",6.6); pdf.cell(28,4,"THIS WEEK")
-        pdf.set_xy(48,y+9.5); pdf.set_text_color(*pdf.TEXT); pdf.set_font("Arial","",7.4); pdf.multi_cell(142,4,delivered)
-        # next-week block below; keep it readable and avoid table-like density.
-        yy=min(y+19, y+30-9)
-        pdf.set_xy(21,yy); pdf.set_text_color(*pdf.MUTED); pdf.set_font("Arial","B",6.6); pdf.cell(28,4,"NEXT WEEK")
-        pdf.set_xy(48,yy-0.5); pdf.set_text_color(*pdf.TEXT); pdf.set_font("Arial","",7.4); pdf.multi_cell(142,4,next_week)
-        pdf.set_y(y+33)
-
-    pdf.section("Risks & Blockers", "Reported blockers, at-risk work and delivery exceptions.")
-    risk_df = data[(data.get("Status", pd.Series(dtype=str)).isin(["At Risk", "Blocked"])) | data.get("Blocker", pd.Series(dtype=str)).fillna("").astype(str).str.strip().ne("")] if not data.empty else data
+    risk_df = dataframe[(dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")]
+    section("Risks & Blockers")
     if risk_df.empty:
-        pdf.set_fill_color(241,249,245); pdf.set_draw_color(*pdf.BORDER); y=pdf.get_y(); pdf.rect(15,y,180,18,"DF")
-        pdf.set_xy(21,y+5); pdf.set_text_color(*pdf.GREEN); pdf.set_font("Arial","B",9); pdf.cell(168,5,"No active blockers or risks were reported for this period.")
-        pdf.set_y(y+23)
+        pdf.set_x(15)
+        pdf.set_text_color(22, 128, 91)
+        pdf.set_font("Arial", "B", 9)
+        pdf.multi_cell(180, 6, safe_pdf_text("No active blockers or risks reported for this period."))
     else:
-        for _,row in risk_df.iterrows():
-            if pdf.get_y()>258:
-                pdf.add_page(); pdf.masthead(compact=True); pdf.set_y(34)
-            project=_pdf_text(row.get("Project / Dashboard","N/A"),80)
-            blocker=_pdf_text(row.get("Blocker","")).strip() or f"Status marked as: {row.get('Status','N/A')}"
-            y=pdf.get_y(); pdf.set_fill_color(255,248,247); pdf.set_draw_color(*pdf.BORDER); pdf.rect(15,y,180,18,"DF")
-            pdf.set_xy(21,y+3); pdf.set_text_color(*pdf.RED); pdf.set_font("Arial","B",8); pdf.cell(168,4,project)
-            pdf.set_xy(21,y+9); pdf.set_text_color(*pdf.TEXT); pdf.set_font("Arial","",7.6); pdf.multi_cell(168,4,blocker)
-            pdf.set_y(y+21)
+        for _, row in risk_df.iterrows():
+            pdf.set_x(15)
+            pdf.set_text_color(194, 65, 61)
+            pdf.set_font("Arial", "B", 9)
+            pdf.multi_cell(180, 5, safe_pdf_text(row.get("Project / Dashboard", "N/A")))
+            
+            pdf.set_x(15)
+            pdf.set_text_color(71, 84, 103)
+            pdf.set_font("Arial", "", 9)
+            blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
+            pdf.multi_cell(180, 5, safe_pdf_text(blocker))
+            pdf.ln(1.5)
 
-    # Data quality remains visible in the report rather than being hidden in the application.
-    dq_count=0
-    for _,row in data.iterrows(): dq_count += len(data_quality_flags(row))
-    pdf.section("Data Quality", "Exceptions identified in the selected updates before leadership distribution.")
-    pdf.set_fill_color(255,255,255); pdf.set_draw_color(*pdf.BORDER); y=pdf.get_y(); pdf.rect(15,y,180,18,"DF")
-    pdf.set_xy(21,y+4); pdf.set_text_color(*pdf.NAVY); pdf.set_font("Arial","B",11); pdf.cell(35,6,str(dq_count))
-    pdf.set_xy(57,y+4); pdf.set_text_color(*pdf.MUTED); pdf.set_font("Arial","",8.2); pdf.multi_cell(132,5,"data-quality exception(s) detected. Review the Action Center for record-level details.")
-    pdf.set_y(y+23)
+    pdf.add_page()
+    section("Management Actions & Health")
+    pdf.set_text_color(52, 64, 84)
+    pdf.set_font("Arial", "", 9)
+    for _, row in dataframe.iterrows():
+        hs = health_score(row)
+        priority, _ = classify_attention(row)
+        if priority != "Normal" or hs < 80:
+            pdf.set_x(15)
+            text = f"{safe_pdf_text(row.get('Project / Dashboard','N/A'))} | Health {hs}/100 | {priority} | Action: {safe_pdf_text(suggested_action(row))}"
+            pdf.multi_cell(180, 5, text)
+            pdf.ln(1)
+            
+    section("Delivery Outlook")
+    pdf.set_font("Arial", "", 9)
+    counts = Counter(delivery_bucket(r) for _,r in dataframe.iterrows())
+    pdf.set_x(15)
+    pdf.multi_cell(180, 5, safe_pdf_text(
+        "Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (
+        counts.get("Overdue",0), counts.get("Next 7 Days",0), counts.get("8–14 Days",0), 
+        counts.get("15+ Days",0), counts.get("Delivered",0)
+    )))
 
-    try:
+    try: 
         output = pdf.output(dest="S")
         return output.encode("latin-1") if isinstance(output, str) else bytes(output)
-    except Exception:
+    except Exception: 
         return bytes(pdf.output())
 
+def create_excel_report(dataframe, report_title):
+    buffer = io.BytesIO()
+    if not OPENPYXL_AVAILABLE:
+        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: 
+            dataframe.to_excel(writer, index=False, sheet_name="Weekly Notes")
+        return buffer.getvalue()
 
-def generate_html_email_body(dataframe, report_title):
-    """Outlook-friendly leadership email using table-based layout and inline CSS."""
-    data = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
-    metrics = _report_metrics(data)
-    takeaway = _leadership_takeaway(data, metrics)
-    period = _report_period_text(data, report_title)
+    wb = Workbook()
+    
+    accounts = list(dataframe["Account"].dropna().unique()) if "Account" in dataframe else []
+    teams = list(dataframe["Team"].dropna().unique()) if "Team" in dataframe else []
+    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
+    team_str = teams[0] if len(teams) == 1 else "Summary"
+    account_team_str = f"{acc_str} - {team_str}"
+    date_str = report_title.split(": ")[-1] if ": " in report_title else report_title
 
-    def esc(v):
-        return html.escape(str(v if v is not None else ""), quote=True)
-
-    def status_style(status):
-        if status in ("At Risk", "Blocked"):
-            return "background:#fff1f0;color:#b42318;border:1px solid #fecdca;"
-        if status == "Completed":
-            return "background:#ecfdf3;color:#067647;border:1px solid #abefc6;"
-        if status in ("On Hold", "Not Started"):
-            return "background:#fffaeb;color:#b54708;border:1px solid #fedf89;"
-        return "background:#eef4ff;color:#175cd3;border:1px solid #b2ccff;"
-
-    actions = metrics["actions"]
-    action_rows = "".join(
-        f"<tr><td style='padding:10px;border-bottom:1px solid #eaecf0;font-weight:700;color:{'#b42318' if a.get('Priority')=='Critical' else '#b54708'}'>{esc(a.get('Priority'))}</td>"
-        f"<td style='padding:10px;border-bottom:1px solid #eaecf0;font-weight:600;color:#344054'>{esc(a.get('Project / Dashboard'))}</td>"
-        f"<td style='padding:10px;border-bottom:1px solid #eaecf0;color:#667085'>{esc(a.get('Reason'))}</td>"
-        f"<td style='padding:10px;border-bottom:1px solid #eaecf0;color:#344054'>{esc(a.get('Recommended Action'))}</td></tr>"
-        for a in actions[:8]
+    ws = wb.active
+    ws.title = "Weekly Notes"
+    cols = [
+        "Resource", "Business Owner", "Project / Dashboard", "Start date", 
+        "Initial Delivery date", "Updated Expected Delivery date", "Work Type", 
+        "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", 
+        "Status", "Blocker"
+    ]
+    
+    ws["A1"] = date_str
+    ws["A1"].fill = PatternFill("solid", fgColor="FFD966")
+    ws["A1"].font = Font(bold=True, color="000000")
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    
+    ws["B1"] = f"{account_team_str} ({date_str})"
+    ws["B1"].fill = PatternFill("solid", fgColor="004B87")
+    ws["B1"].font = Font(bold=True, color="FFFFFF")
+    ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+    
+    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=len(cols))
+    ws.row_dimensions[1].height = 25
+    
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    header_font = Font(bold=True, color="000000")
+    thin_border = Border(
+        left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), 
+        top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000')
     )
-    if not action_rows:
-        action_rows = "<tr><td colspan='4' style='padding:14px;color:#067647;'>No management-attention items identified for this selection.</td></tr>"
+    
+    for c_idx, col_name in enumerate(cols, 1):
+        cell = ws.cell(row=2, column=c_idx, value=col_name)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="bottom", wrap_text=True)
+    ws.row_dimensions[2].height = 35
+    
+    resource_fill = PatternFill("solid", fgColor="FCE4D6")
+    owner_fill = PatternFill("solid", fgColor="E2EFDA")
+    
+    for r_idx, row in enumerate(dataframe.to_dict('records'), 3):
+        for c_idx, col_name in enumerate(cols, 1):
+            val = row.get(col_name, "")
+            cell = ws.cell(row=r_idx, column=c_idx, value=val)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            
+            if col_name == "Resource": 
+                cell.fill = resource_fill
+                cell.font = Font(bold=True, color="004B87")
+            elif col_name == "Business Owner": 
+                cell.fill = owner_fill
+                cell.font = Font(bold=True, color="004B87")
+            elif col_name == "Status": 
+                cell.font = Font(bold=True)
+                
+    widths = {
+        "A": 16, "B": 14, "C": 30, "D": 11, "E": 11, "F": 13, "G": 22, 
+        "H": 38, "I": 35, "J": 12, "K": 12, "L": 14, "M": 38
+    }
+    for col_letter, width in widths.items(): 
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A3"
+    ws.auto_filter.ref = f"A2:M{max(2,len(dataframe)+2)}"
 
-    detail_rows = "".join(
-        f"<tr><td style='padding:9px;border-bottom:1px solid #eaecf0;font-weight:600;color:#344054'>{esc(r.get('Project / Dashboard',''))}</td>"
-        f"<td style='padding:9px;border-bottom:1px solid #eaecf0;color:#667085'>{esc(r.get('Business Owner',''))}</td>"
-        f"<td style='padding:9px;border-bottom:1px solid #eaecf0'><span style='display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;{status_style(str(r.get('Status','')))}'>{esc(r.get('Status',''))}</span></td>"
-        f"<td style='padding:9px;border-bottom:1px solid #eaecf0;text-align:center;color:#344054'>{esc(r.get('Completion %',''))}</td>"
-        f"<td style='padding:9px;border-bottom:1px solid #eaecf0;text-align:center;color:#344054'>{esc(r.get('Utilization %',''))}</td>"
-        f"<td style='padding:9px;border-bottom:1px solid #eaecf0;color:#667085'>{esc(r.get('Updated Expected Delivery date',''))}</td></tr>"
-        for _,r in data.head(25).iterrows()
-    )
-    highlight_cards = []
-    for _,r in data.head(6).iterrows():
-        delivered = str(r.get('This Week Delivered','')).strip() or 'No update reported.'
-        nxt = str(r.get('Next Week Priority','')).strip() or 'No priority reported.'
-        highlight_cards.append(
-            f"<tr><td style='padding:14px 0;border-bottom:1px solid #eaecf0;vertical-align:top;width:28%;font-weight:700;color:#16324f'>{esc(r.get('Project / Dashboard',''))}</td>"
-            f"<td style='padding:14px 12px;border-bottom:1px solid #eaecf0;vertical-align:top;width:36%;color:#475467'><b style='color:#667085;font-size:11px'>THIS WEEK</b><br>{esc(delivered)}</td>"
-            f"<td style='padding:14px 0;border-bottom:1px solid #eaecf0;vertical-align:top;width:36%;color:#475467'><b style='color:#667085;font-size:11px'>NEXT WEEK</b><br>{esc(nxt)}</td></tr>"
-        )
-    highlights_html = "".join(highlight_cards) or "<tr><td style='padding:14px;color:#667085'>No project updates available.</td></tr>"
+    ex = wb.create_sheet("Executive Summary")
+    score, counts = portfolio_health(dataframe)
+    avg_completion = int(round(sum(pct_value(x) for x in dataframe["Completion %"])/max(1,len(dataframe)))) if not dataframe.empty else 0
+    metrics=[
+        ("Report Period", current_period_label(dataframe)),
+        ("Projects", len(dataframe)),
+        ("Resources", dataframe["Resource"].nunique() if not dataframe.empty else 0),
+        ("Avg Completion", f"{avg_completion}%"),
+        ("Avg Utilization", f"{resource_utilization(dataframe)}%"),
+        ("Portfolio Health", f"{score}/100"),
+        ("Healthy", counts.get("Healthy",0)),
+        ("Attention", counts.get("Attention",0)),
+        ("Critical", counts.get("Critical",0))
+    ]
+    ex.append(["Executive Summary",""])
+    ex.merge_cells("A1:B1")
+    ex["A1"].font = Font(size=16, bold=True, color="FFFFFF")
+    ex["A1"].fill = PatternFill("solid", fgColor="004B87")
+    for k,v in metrics: 
+        ex.append([k,v])
+    for cell in ex["A"]: 
+        cell.font = Font(bold=True)
+    ex.column_dimensions["A"].width = 25
+    ex.column_dimensions["B"].width = 35
+    ex.freeze_panes = "A2"
 
-    health = metrics["health"]
-    health_bg = "#ecfdf3" if health >= 85 else ("#fffaeb" if health >= 70 else "#fff1f0")
-    health_fg = "#067647" if health >= 85 else ("#b54708" if health >= 70 else "#b42318")
+    ra = wb.create_sheet("Risks & Actions")
+    action_items = build_action_items(dataframe)
+    ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
+    for item in action_items: 
+        ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
 
-    return f"""<!doctype html>
-<html><body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;color:#344054;">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f7fa;padding:28px 12px;">
-<tr><td align="center">
-<table role="presentation" width="760" cellspacing="0" cellpadding="0" border="0" style="max-width:760px;background:#ffffff;border:1px solid #e4e7ec;">
-<tr><td style="background:#16324f;padding:26px 30px 22px;">
-<div style="font-size:11px;font-weight:700;letter-spacing:1.4px;color:#ef7f22;">FACTSPAN &nbsp;|&nbsp; WEEKLY PROJECT MANAGEMENT</div>
-<div style="font-size:28px;line-height:34px;font-weight:700;color:#ffffff;margin-top:7px;">Weekly Project Report</div>
-<div style="font-size:13px;color:#d8e3ee;margin-top:7px;">{esc(period)}</div>
-</td></tr>
-<tr><td style="padding:24px 30px 8px;">
-<div style="font-size:12px;font-weight:700;letter-spacing:.6px;color:#667085;">EXECUTIVE PULSE</div>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;"><tr>
-{''.join(f"<td width='20%' style='padding:0 4px 0 0;'><div style='border:1px solid #e4e7ec;padding:12px 10px;height:58px;'><div style='font-size:10px;font-weight:700;color:#667085'>{label}</div><div style='font-size:21px;font-weight:700;color:#16324f;margin-top:5px'>{esc(value)}</div></div></td>" for label,value in [('INITIATIVES',metrics['projects']),('RESOURCES',metrics['resources']),('UPDATES',metrics['updates']),('COMPLETION',f"{metrics['completion']}%"),('HEALTH',f"{metrics['health']}/100")])}
-</tr></table>
-</td></tr>
-<tr><td style="padding:12px 30px 8px;">
-<div style="font-size:18px;font-weight:700;color:#16324f;border-left:4px solid #ef7f22;padding-left:10px;">Leadership Takeaway</div>
-<div style="margin-top:10px;background:#f8fafc;border:1px solid #eaecf0;padding:16px;font-size:13px;line-height:21px;color:#475467;">{esc(takeaway)}</div>
-</td></tr>
-<tr><td style="padding:16px 30px 8px;">
-<div style="font-size:18px;font-weight:700;color:#16324f;border-left:4px solid #ef7f22;padding-left:10px;">Delivery Outlook</div>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;"><tr>
-{''.join(f"<td width='20%' align='center' style='background:#f8fafc;border:1px solid #eaecf0;padding:10px 4px;'><div style='font-size:19px;font-weight:700;color:#16324f'>{value}</div><div style='font-size:10px;color:#667085;margin-top:3px'>{esc(label)}</div></td>" for label,value in [('OVERDUE',metrics['overdue']),('NEXT 7 DAYS',metrics['due_7']),('8–14 DAYS',metrics['due_14']),('15+ DAYS',metrics['due_15']),('DELIVERED',metrics['delivered'])])}
-</tr></table>
-</td></tr>
-<tr><td style="padding:16px 30px 8px;">
-<div style="font-size:18px;font-weight:700;color:#16324f;border-left:4px solid #ef7f22;padding-left:10px;">Management Attention</div>
-<table width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;border:1px solid #eaecf0;border-collapse:collapse;font-size:12px;">
-<tr style="background:#f2f4f7;font-weight:700;color:#475467;"><td style="padding:9px;">Priority</td><td style="padding:9px;">Initiative</td><td style="padding:9px;">Reason</td><td style="padding:9px;">Recommended Action</td></tr>
-{action_rows}</table>
-</td></tr>
-<tr><td style="padding:16px 30px 8px;">
-<div style="font-size:18px;font-weight:700;color:#16324f;border-left:4px solid #ef7f22;padding-left:10px;">Weekly Highlights &amp; Next Week</div>
-<table width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:4px;font-size:12px;">{highlights_html}</table>
-</td></tr>
-<tr><td style="padding:16px 30px 8px;">
-<div style="font-size:18px;font-weight:700;color:#16324f;border-left:4px solid #ef7f22;padding-left:10px;">Portfolio Delivery</div>
-<table width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;border:1px solid #eaecf0;border-collapse:collapse;font-size:11px;">
-<tr style="background:#f2f4f7;font-weight:700;color:#475467;"><td style="padding:9px;">Initiative</td><td style="padding:9px;">Owner</td><td style="padding:9px;">Status</td><td style="padding:9px;text-align:center;">Comp.</td><td style="padding:9px;text-align:center;">Util.</td><td style="padding:9px;">Expected Delivery</td></tr>
-{detail_rows}</table>
-</td></tr>
-<tr><td style="padding:20px 30px 28px;">
-<div style="background:{health_bg};border:1px solid #eaecf0;padding:13px 15px;color:{health_fg};font-weight:700;font-size:12px;">Portfolio Health: {metrics['health']}/100 · {esc(metrics['health_label'])} · {metrics['risks']} risk/blocker item(s)</div>
-<div style="margin-top:14px;font-size:11px;line-height:17px;color:#98a2b3;">This is the leadership summary for the selected Weekly Notes data. The attached PDF contains the full report, including detailed risks, actions and data-quality observations.</div>
-</td></tr>
-<tr><td style="background:#f8fafc;border-top:1px solid #eaecf0;padding:15px 30px;font-size:10px;color:#98a2b3;">Generated by Weekly Project Report · {esc(st.session_state.get('current_name',''))} · {esc(datetime.now(IST).strftime('%d %b %Y, %I:%M %p'))}</td></tr>
-</table></td></tr></table></body></html>"""
+    wow = wb.create_sheet("Week-over-Week")
+    yrs = list(dataframe["Year"].unique()) if not dataframe.empty else []
+    mos = list(dataframe["Month"].unique()) if not dataframe.empty else []
+    wks = list(dataframe["Week"].unique()) if not dataframe.empty else []
+    mv = compare_current_to_prior(dataframe, get_latest_prior_week(dataframe,yrs[0],mos[0],wks[0])) if len(yrs)==len(mos)==len(wks)==1 else pd.DataFrame()
+    if mv.empty: 
+        wow.append(["Select exactly one Year, Month and Week in the app to populate week-over-week movement."])
+    else:
+        wow.append(list(mv.columns))
+        for r in mv.itertuples(index=False,name=None):
+            wow.append(list(r))
 
+    dq = wb.create_sheet("Data Quality")
+    dq.append(["Project / Dashboard","Resource","Status","Issues"])
+    for _,r in dataframe.iterrows():
+        flags = data_quality_flags(r)
+        if flags: 
+            dq.append([r.get("Project / Dashboard",""), r.get("Resource",""), r.get("Status",""), "; ".join(flags)])
 
-def _valid_email_list(values):
-    valid=[]; invalid=[]
-    pattern=re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-    for value in values:
-        v=str(value).strip()
-        if not v: continue
-        if pattern.match(v): valid.append(v)
-        else: invalid.append(v)
-    return valid, invalid
+    for sh in [ex, ra, wow, dq]:
+        for cell in sh[1]: 
+            cell.font = Font(bold=True, color="000000")
+            cell.fill = PatternFill("solid", fgColor="DDEBF7")
+            cell.alignment = Alignment(wrap_text=True)
+        for col in range(1, sh.max_column+1): 
+            sh.column_dimensions[get_column_letter(col)].width = min(45, max(14, sh.column_dimensions[get_column_letter(col)].width or 14))
+        sh.freeze_panes = "A2"
+        
+    wb.save(buffer)
+    return buffer.getvalue()
 
-
-def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, dataframe=None):
-    """Send the leadership HTML email with the upgraded PDF as the sole attachment."""
-    recipients, bad_to = _valid_email_list(recipients or [])
-    cc_recipients, bad_cc = _valid_email_list(cc_recipients or [])
-    if not recipients:
+def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, excel_bytes=None, html_body=None):
+    recipients, invalid_to = _validated_emails([x.strip() for x in recipients if x.strip()])
+    cc_recipients, invalid_cc = _validated_emails([x.strip() for x in (cc_recipients or []) if x.strip()])
+    if not recipients: 
         return False, "Please enter at least one valid recipient email address."
-    if bad_to or bad_cc:
-        return False, f"Invalid email address(es): {', '.join(bad_to + bad_cc)}"
+    
     cfg = st.secrets if hasattr(st, "secrets") else {}
     host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
     port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
@@ -1091,121 +1547,61 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, d
     password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
     sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
     use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
-    if not host or not sender:
+    
+    if not host or not sender: 
         return False, "Email sending is not configured (SMTP secrets missing)."
-    html_body = generate_html_email_body(dataframe if dataframe is not None else pd.DataFrame(), report_title)
+    
     msg = EmailMessage()
     msg["Subject"] = report_title
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
-    if cc_recipients: msg["Cc"] = ", ".join(cc_recipients)
-    msg.set_content(f"Please find attached the {report_title}. The HTML version contains the executive leadership summary.")
-    msg.add_alternative(html_body, subtype="html")
+    if cc_recipients: 
+        msg["Cc"] = ", ".join(cc_recipients)
+    
+    if html_body:
+        msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
+        msg.add_alternative(html_body, subtype='html')
+        
+        if os.path.exists("logo.png") and "cid:factspan_logo" in html_body:
+            try:
+                with open("logo.png", "rb") as img:
+                    msg.get_payload()[1].add_related(img.read(), maintype='image', subtype='png', cid='<factspan_logo>')
+            except Exception: pass
+    else:
+        msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
+        
     if pdf_bytes:
         msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
+    if excel_bytes:
+        msg.add_attachment(excel_bytes, maintype="application", subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="Weekly_Project_Report.xlsx")
+        
     try:
         with smtplib.SMTP(host, port, timeout=20) as server:
-            if use_tls:
+            if use_tls: 
                 server.starttls()
-            if username and password:
+            if username and password: 
                 server.login(username, password)
             server.send_message(msg)
-        return True, f"Leadership report sent successfully to {', '.join(recipients)}."
-    except Exception as exc:
+        return True, f"Report sent successfully to {', '.join(recipients)}."
+    except Exception as exc: 
         return False, f"Unable to send report: {exc}"
 
-def create_excel_report(dataframe, report_title):
-    """Create the original Weekly Notes sheet plus additive management sheets."""
-    buffer = io.BytesIO()
-    wb = Workbook() if OPENPYXL_AVAILABLE else None
-    if wb is None:
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: dataframe.to_excel(writer, index=False, sheet_name="Weekly Notes")
-        return buffer.getvalue()
-
-    # Original sheet preserved.
-    ws = wb.active; ws.title = "Weekly Notes"
-    cols = ["Resource", "Business Owner", "Project / Dashboard", "Start date", "Initial Delivery date", "Updated Expected Delivery date", "Work Type", "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", "Status", "Blocker"]
-    date_str = report_title.split(": ")[-1] if ": " in report_title else report_title
-    ws["A1"] = date_str; ws["A1"].fill = PatternFill("solid", fgColor="FFD966"); ws["A1"].font = Font(bold=True); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    ws["B1"] = f"Weekly Notes ({date_str})"; ws["B1"].fill = PatternFill("solid", fgColor="004B87"); ws["B1"].font = Font(bold=True, color="FFFFFF"); ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
-    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=len(cols)); ws.row_dimensions[1].height = 25
-    header_fill = PatternFill("solid", fgColor="DDEBF7"); header_font = Font(bold=True); thin_border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
-    for c_idx, col_name in enumerate(cols, 1):
-        cell = ws.cell(row=2, column=c_idx, value=col_name); cell.fill = header_fill; cell.font = header_font; cell.border = thin_border; cell.alignment = Alignment(horizontal="center", vertical="bottom", wrap_text=True)
-    ws.row_dimensions[2].height = 35
-    resource_fill = PatternFill("solid", fgColor="FCE4D6"); owner_fill = PatternFill("solid", fgColor="E2EFDA")
-    for r_idx, row in enumerate(dataframe.to_dict('records'), 3):
-        for c_idx, col_name in enumerate(cols, 1):
-            val = row.get(col_name, ""); cell = ws.cell(row=r_idx, column=c_idx, value=val); cell.border = thin_border; cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if col_name == "Resource": cell.fill = resource_fill; cell.font = Font(bold=True, color="004B87")
-            elif col_name == "Business Owner": cell.fill = owner_fill; cell.font = Font(bold=True, color="004B87")
-            elif col_name == "Status": cell.font = Font(bold=True)
-    widths = {"A": 16, "B": 14, "C": 30, "D": 11, "E": 11, "F": 13, "G": 22, "H": 38, "I": 35, "J": 12, "K": 12, "L": 14, "M": 38}
-    for col_letter, width in widths.items(): ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A3"; ws.auto_filter.ref = f"A2:M{max(2,len(dataframe)+2)}"
-
-    # Executive Summary
-    ex = wb.create_sheet("Executive Summary")
-    score, counts = portfolio_health(dataframe)
-    avg_completion = int(round(sum(pct_value(x) for x in dataframe["Completion %"])/max(1,len(dataframe)))) if not dataframe.empty else 0
-    metrics=[("Report Period",current_period_label(dataframe)),("Projects",len(dataframe)),("Resources",dataframe["Resource"].nunique() if not dataframe.empty else 0),("Avg Completion",f"{avg_completion}%"),("Avg Utilization",f"{resource_utilization(dataframe)}%"),("Portfolio Health",f"{score}/100"),("Healthy",counts.get("Healthy",0)),("Attention",counts.get("Attention",0)),("Critical",counts.get("Critical",0))]
-    ex.append(["Executive Summary",""]); ex.merge_cells("A1:B1"); ex["A1"].font=Font(size=16,bold=True,color="FFFFFF"); ex["A1"].fill=PatternFill("solid",fgColor="004B87")
-    for k,v in metrics: ex.append([k,v])
-    for cell in ex["A"]: cell.font=Font(bold=True)
-    ex.column_dimensions["A"].width=25; ex.column_dimensions["B"].width=35; ex.freeze_panes="A2"
-
-    # Risks & Actions
-    ra = wb.create_sheet("Risks & Actions")
-    action_items=build_action_items(dataframe); ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
-    for item in action_items: ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
-
-    # Week-over-week
-    wow = wb.create_sheet("Week-over-Week")
-    yrs=list(dataframe["Year"].unique()) if not dataframe.empty else []; mos=list(dataframe["Month"].unique()) if not dataframe.empty else []; wks=list(dataframe["Week"].unique()) if not dataframe.empty else []
-    mv=compare_current_to_prior(dataframe,get_latest_prior_week(dataframe,yrs[0],mos[0],wks[0])) if len(yrs)==len(mos)==len(wks)==1 else pd.DataFrame()
-    if mv.empty: wow.append(["Select exactly one Year, Month and Week in the app to populate week-over-week movement."])
-    else:
-        wow.append(list(mv.columns)); [wow.append(list(r)) for r in mv.itertuples(index=False,name=None)]
-
-    # Data Quality
-    dq=wb.create_sheet("Data Quality")
-    dq.append(["Project / Dashboard","Resource","Status","Issues"])
-    for _,r in dataframe.iterrows():
-        flags=data_quality_flags(r)
-        if flags: dq.append([r.get("Project / Dashboard",""),r.get("Resource",""),r.get("Status",""),"; ".join(flags)])
-
-    # Common styling for management sheets.
-    for sh in [ex,ra,wow,dq]:
-        for cell in sh[1]: cell.font=Font(bold=True); cell.fill=PatternFill("solid",fgColor="DDEBF7"); cell.alignment=Alignment(wrap_text=True)
-        for col in range(1, sh.max_column+1): sh.column_dimensions[get_column_letter(col)].width=min(45,max(14,sh.column_dimensions[get_column_letter(col)].width or 14))
-        sh.freeze_panes="A2"
-    wb.save(buffer); return buffer.getvalue()
-
-def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None):
-    recipients = [x.strip() for x in recipients if x.strip()]; cc_recipients = [x.strip() for x in (cc_recipients or []) if x.strip()]
-    if not recipients: return False, "Please enter at least one recipient email address."
-    cfg = st.secrets if hasattr(st, "secrets") else {}; host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", "")); port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587"))); username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", "")); password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", "")); sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username)); use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
-    if not host or not sender: return False, "Email sending is not configured (SMTP secrets missing)."
-    msg = EmailMessage(); msg["Subject"] = report_title; msg["From"] = sender; msg["To"] = ", ".join(recipients)
-    if cc_recipients: msg["Cc"] = ", ".join(cc_recipients)
-    # Rich plain-text executive summary keeps email useful even before opening the PDF.
-    msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
-    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
-    try:
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            if use_tls: server.starttls()
-            if username and password: server.login(username, password)
-            server.send_message(msg)
-        return True, f"Report sent successfully to {', '.join(recipients)}."
-    except Exception as exc: return False, f"Unable to send report: {exc}"
+def _validated_emails(values):
+    valid = []
+    invalid = []
+    for raw in values:
+        addr = getaddresses([raw])[0][1].strip().lower()
+        if addr and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr):
+            valid.append(addr)
+        elif raw.strip():
+            invalid.append(raw.strip())
+    return list(dict.fromkeys(valid)), list(dict.fromkeys(invalid))
 
 # =========================================================
-# DATA + GLOBAL TOP AREA
+# UI TOP AREA
 # =========================================================
 df = pd.DataFrame(st.session_state.notes_db)
 filtered_df = pd.DataFrame()
-reporting_week = "All Weeks"
-reporting_month = "All Months"
 
 st.markdown(f"""
 <div class="app-hero">
@@ -1216,7 +1612,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Lightweight utility bar — additive only.
 util_c1, util_c2, util_c3, util_c4 = st.columns([1.2, 1.4, 5.2, 1.8])
 with util_c1:
     if st.button("🔄 Refresh Data", key="refresh_data_top", use_container_width=True):
@@ -1256,7 +1651,6 @@ elif nav_selection == "🚦 Action Center":
     st.markdown('<div class="page-head"><div class="page-title">🚦 Action Center</div><div class="page-subtitle">Prioritized delivery risks, overdue work, data-quality issues and items needing management attention.</div></div>', unsafe_allow_html=True)
 
 if nav_selection != "✍️ Enter Notes" and not df.empty:
-    
     st.markdown("""
     <style>
     div[data-testid="stSelectbox"], div[data-testid="stMultiSelect"] {
@@ -1274,78 +1668,102 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     </style>
     """, unsafe_allow_html=True)
 
-    # Compact filter drawer: all existing filters remain available, but the main page stays clean.
     active_filter_count = 0
     if st.session_state.get("filter_resources"): active_filter_count += 1
     if st.session_state.get("filter_year"): active_filter_count += 1
     if st.session_state.get("filter_month"): active_filter_count += 1
     if st.session_state.get("filter_week"): active_filter_count += 1
     if st.session_state.get("quick_filter_select", "All") != "All": active_filter_count += 1
-    filter_title = f"🔎 Filters & Search {'· ' + str(active_filter_count) + ' active' if active_filter_count else '· All records'}"
-    with st.expander(filter_title, expanded=False):
+    
+    with st.expander("🔎 Filters & Search", expanded=True):
         st.caption("Use the compact two-row filter bar. Selected multi-filters can be removed directly from their fields.")
-        pv1,pv2,pv3,pv4,pv5 = st.columns(5)
+        
         resource_options_all = list(df["Resource"].dropna().unique())
-        with pv1:
-            if st.button("My Updates", key="preset_my_updates", use_container_width=True):
-                st.session_state.filter_resources = [st.session_state.current_email] if st.session_state.current_email in resource_options_all else []
-                st.session_state.quick_filter_select = "All"; st.rerun()
-        with pv2:
-            if st.button("At Risk", key="preset_at_risk", use_container_width=True):
-                st.session_state.quick_filter_select = "At Risk / Blocked"; st.rerun()
-        with pv3:
-            if st.button("Overdue", key="preset_overdue", use_container_width=True):
-                st.session_state.quick_filter_select = "Overdue"; st.rerun()
-        with pv4:
-            if st.button("Due Soon", key="preset_due_soon", use_container_width=True):
-                st.session_state.quick_filter_select = "Due Soon"; st.rerun()
-        with pv5:
-            if st.button("Executive View", key="preset_exec_view", use_container_width=True):
-                st.session_state.filter_resources=[]; st.session_state.filter_year=[]; st.session_state.filter_month=[]; st.session_state.filter_week=[]; st.session_state.quick_filter_select="All"; st.session_state.project_search_input=""; st.rerun()
+        
+        def preset_my_updates_cb():
+            st.session_state.filter_resources = [st.session_state.current_email] if st.session_state.current_email in resource_options_all else []
+            st.session_state.quick_filter_select = "All"
+        def preset_at_risk_cb(): 
+            st.session_state.quick_filter_select = "At Risk / Blocked"
+        def preset_overdue_cb(): 
+            st.session_state.quick_filter_select = "Overdue"
+        def preset_due_soon_cb(): 
+            st.session_state.quick_filter_select = "Due Soon"
+        def preset_exec_view_cb():
+            st.session_state.filter_resources = []
+            st.session_state.filter_year = []
+            st.session_state.filter_month = []
+            st.session_state.filter_week = []
+            st.session_state.quick_filter_select = "All"
+            st.session_state.project_search_input = ""
+        def clear_filters_cb():
+            for k,v in [
+                ("filter_account","All"), ("filter_team","All"), ("filter_resources",[]),
+                ("filter_year",[]), ("filter_month",[]), ("filter_week",[]),
+                ("quick_filter_select","All"), ("project_search_input","")
+            ]:
+                st.session_state[k]=v
+
+        pv1, pv2, pv3, pv4, pv5 = st.columns(5)
+        with pv1: st.button("My Updates", key="preset_my_updates", use_container_width=True, on_click=preset_my_updates_cb)
+        with pv2: st.button("At Risk", key="preset_at_risk", use_container_width=True, on_click=preset_at_risk_cb)
+        with pv3: st.button("Overdue", key="preset_overdue", use_container_width=True, on_click=preset_overdue_cb)
+        with pv4: st.button("Due Soon", key="preset_due_soon", use_container_width=True, on_click=preset_due_soon_cb)
+        with pv5: st.button("Executive View", key="preset_exec_view", use_container_width=True, on_click=preset_exec_view_cb)
+        
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
             filter_acc = st.selectbox("Account", options=["All"] + list(df["Account"].dropna().unique()), key="filter_account")
             filtered_df = df if filter_acc == "All" else df[df["Account"] == filter_acc]
         with f_col2:
             filter_team = st.selectbox("Team", options=["All"] + list(filtered_df["Team"].dropna().unique()), key="filter_team")
-            if filter_team != "All": filtered_df = filtered_df[filtered_df["Team"] == filter_team]
+            if filter_team != "All": 
+                filtered_df = filtered_df[filtered_df["Team"] == filter_team]
         with f_col3:
             res_options = list(filtered_df["Resource"].dropna().unique())
             selected_resources = st.multiselect("Resource", options=res_options, key="filter_resources", placeholder="All resources")
-            if selected_resources: filtered_df = filtered_df[filtered_df["Resource"].isin(selected_resources)]
+            if selected_resources: 
+                filtered_df = filtered_df[filtered_df["Resource"].isin(selected_resources)]
         with f_col4:
             project_search = st.text_input("Search Projects", key="project_search_input", placeholder="Project / dashboard name")
-            if project_search: filtered_df = filtered_df[filtered_df["Project / Dashboard"].astype(str).str.contains(project_search, case=False, na=False)]
+            if project_search: 
+                filtered_df = filtered_df[filtered_df["Project / Dashboard"].astype(str).str.contains(project_search, case=False, na=False)]
 
         f2_col1, f2_col2, f2_col3, f2_col4 = st.columns(4)
         with f2_col1:
             year_options = list(filtered_df["Year"].dropna().unique())
             filter_year = st.multiselect("Year", options=year_options, key="filter_year", placeholder="All years")
-            if filter_year: filtered_df = filtered_df[filtered_df["Year"].isin(filter_year)]
+            if filter_year: 
+                filtered_df = filtered_df[filtered_df["Year"].isin(filter_year)]
         with f2_col2:
             month_options = list(filtered_df["Month"].dropna().unique())
             filter_month = st.multiselect("Month", options=month_options, key="filter_month", placeholder="All months")
-            if filter_month: filtered_df = filtered_df[filtered_df["Month"].isin(filter_month)]
+            if filter_month: 
+                filtered_df = filtered_df[filtered_df["Month"].isin(filter_month)]
         with f2_col3:
             week_options = list(filtered_df["Week"].dropna().unique())
             filter_week = st.multiselect("Week", options=week_options, key="filter_week", placeholder="All weeks")
-            if filter_week: filtered_df = filtered_df[filtered_df["Week"].isin(filter_week)]
+            if filter_week: 
+                filtered_df = filtered_df[filtered_df["Week"].isin(filter_week)]
         with f2_col4:
             quick_filters_opts = ["All", "At Risk / Blocked", "Due Soon", "Overdue", "Missing Update", "Data Quality Issues"]
             quick_filter = st.selectbox("Quick Filter", options=quick_filters_opts, key="quick_filter_select")
-            if quick_filter == "At Risk / Blocked": filtered_df = filtered_df[filtered_df["Status"].isin(["At Risk", "Blocked"])]
-            elif quick_filter == "Due Soon": filtered_df = filtered_df[filtered_df.apply(lambda r: delivery_state(r).startswith("Due in"), axis=1)]
-            elif quick_filter == "Overdue": filtered_df = filtered_df[filtered_df.apply(lambda r: delivery_state(r).startswith("Overdue"), axis=1)]
-            elif quick_filter == "Missing Update": filtered_df = filtered_df[filtered_df.apply(lambda r: "No weekly delivery update reported" in data_quality_flags(r), axis=1)]
-            elif quick_filter == "Data Quality Issues": filtered_df = filtered_df[filtered_df.apply(lambda r: len(data_quality_flags(r)) > 0, axis=1)]
+            if quick_filter == "At Risk / Blocked": 
+                filtered_df = filtered_df[filtered_df["Status"].isin(["At Risk", "Blocked"])]
+            elif quick_filter == "Due Soon": 
+                filtered_df = filtered_df[filtered_df.apply(lambda r: delivery_state(r).startswith("Due in"), axis=1)]
+            elif quick_filter == "Overdue": 
+                filtered_df = filtered_df[filtered_df.apply(lambda r: delivery_state(r).startswith("Overdue"), axis=1)]
+            elif quick_filter == "Missing Update": 
+                filtered_df = filtered_df[filtered_df.apply(lambda r: "No weekly delivery update reported" in data_quality_flags(r), axis=1)]
+            elif quick_filter == "Data Quality Issues": 
+                filtered_df = filtered_df[filtered_df.apply(lambda r: len(data_quality_flags(r)) > 0, axis=1)]
 
         rc1, rc2 = st.columns([1,7])
         with rc1:
-            if st.button("↺ Clear Filters", key="clear_all_filters", use_container_width=True):
-                for k,v in [("filter_account","All"),("filter_team","All"),("filter_resources",[]),("filter_year",[]),("filter_month",[]),("filter_week",[]),("quick_filter_select","All"),("project_search_input","")]: st.session_state[k]=v
-                st.rerun()
+            st.button("↺ Clear Filters", key="clear_all_filters", use_container_width=True, on_click=clear_filters_cb)
         with rc2:
-            chips=[]
+            chips = []
             if filter_acc != "All": chips.append(f"Account: {filter_acc}")
             if filter_team != "All": chips.append(f"Team: {filter_team}")
             if selected_resources: chips.append(f"Resources: {len(selected_resources)}")
@@ -1354,7 +1772,12 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
             if filter_week: chips.append(f"Week: {format_badge_text(filter_week, week_options)}")
             if quick_filter != "All": chips.append(f"Quick: {quick_filter}")
             if project_search: chips.append(f"Search: {project_search}")
-            st.markdown("<div class='filter-summary'>" + ("".join(f"<span class='filter-chip'>{html_escape(c)}</span>" for c in chips) if chips else "<span class='filter-caption'>No filters applied · showing all available records</span>") + "</div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='filter-summary'>" + 
+                ("".join(f"<span class='filter-chip'>{html_escape(c)}</span>" for c in chips) if chips else "<span class='filter-caption'>No filters applied · showing all available records</span>") + 
+                "</div>", 
+                unsafe_allow_html=True
+            )
 
     reporting_month = format_badge_text(filter_month, month_options)
     reporting_week = format_badge_text(filter_week, week_options)
@@ -1387,7 +1810,8 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
                     st.markdown('<div class="marker-pdf"></div>', unsafe_allow_html=True)
                     st.download_button("📄 Export PDF", data=pdf_bytes, file_name="Weekly_Notes_Executive_Report.pdf", mime="application/pdf", key="pdf_tab3", use_container_width=True)
 else:
-    if nav_selection == "✍️ Enter Notes": filtered_df = df
+    if nav_selection == "✍️ Enter Notes": 
+        filtered_df = df
 
 # =========================================================
 # SEND REPORT DIALOG
@@ -1395,22 +1819,32 @@ else:
 if st.session_state.get("show_send_dialog"):
     report_kind = st.session_state["show_send_dialog"]
     report_title = f"{'Weekly Summary' if report_kind == 'weekly' else 'Executive Report'}: {reporting_month} - {reporting_week}"
+    
     with st.expander("📤 Send Report", expanded=True):
-        st.markdown("**Send the leadership HTML email with the upgraded PDF report attached**")
+        st.markdown("**Send the generated PDF report by email**")
         to_value = st.text_input("To", placeholder="name@company.com, another@company.com", key="send_to")
         cc_value = st.text_input("CC (optional)", placeholder="name@company.com", key="send_cc")
         subject_value = st.text_input("Subject", value=report_title, key="send_subject")
+        
         b1, b2 = st.columns([1, 1])
         with b1:
             if st.button("✉️ Send Now", type="primary", use_container_width=True, key="send_now"):
                 to_list = [x.strip() for x in to_value.replace(";", ",").split(",") if x.strip()]
                 cc_list = [x.strip() for x in cc_value.replace(";", ",").split(",") if x.strip()]
-                current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
-                if current_pdf is None: st.error("PDF generation unavailable.")
+                with st.spinner("Generating leadership email, PDF and Excel report..."):
+                    current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
+                    current_excel = create_excel_report(filtered_df, subject_value)
+                    current_html = generate_html_email_body(filtered_df, subject_value)
+                    
+                if current_pdf is None: 
+                    st.error("PDF generation unavailable.")
                 else:
-                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, filtered_df)
-                    if ok: st.success(message); st.session_state["show_send_dialog"] = None
-                    else: st.error(message)
+                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, current_excel, current_html)
+                    if ok: 
+                        st.success(message)
+                        st.session_state["show_send_dialog"] = None
+                    else: 
+                        st.error(message)
         with b2:
             if st.button("Cancel", use_container_width=True, key="cancel_send"):
                 st.session_state["show_send_dialog"] = None
@@ -1446,18 +1880,22 @@ if nav_selection == "✍️ Enter Notes":
         st.markdown('<div class="section-header">02 — Timeframe & Ownership</div>', unsafe_allow_html=True)
         with st.container(border=True):
             t_col1, t_col2, t_col3, t_col4 = st.columns(4)
-            with t_col1: year = st.selectbox("Year", options=[datetime.now(IST).year, datetime.now(IST).year+1, datetime.now(IST).year+2])
-            with t_col2: month = st.selectbox("Month", options=["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
-            with t_col3: week = st.selectbox("Week", options=["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"])
-            with t_col4: resource = st.text_input("Resource Email", value=st.session_state.current_email)
+            with t_col1: 
+                year = st.selectbox("Year", options=[datetime.now(IST).year, datetime.now(IST).year+1, datetime.now(IST).year+2])
+            with t_col2: 
+                month = st.selectbox("Month", options=["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
+            with t_col3: 
+                week = st.selectbox("Week", options=["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"])
+            with t_col4: 
+                resource = st.text_input("Resource Email", value=st.session_state.current_email)
         st.caption(f"Reporting user: {html_escape(st.session_state.get('current_name',''))} · {html_escape(st.session_state.get('current_email',''))}")
 
-        # Copy Previous Week — additive shortcut. It never saves automatically.
         copy_col1, copy_col2, copy_col3 = st.columns([2.2, 2.2, 5.6])
         with copy_col1:
             if st.button("📋 Load Previous Week", key="load_previous_week", use_container_width=True):
                 prev_source_df = pd.DataFrame(st.session_state.notes_db) if st.session_state.notes_db else pd.DataFrame()
                 prev_for_copy = get_latest_prior_week(prev_source_df, year, month, week)
+                
                 if prev_for_copy.empty:
                     st.info("No previous reported week was found for this timeframe.")
                 else:
@@ -1476,16 +1914,20 @@ if nav_selection == "✍️ Enter Notes":
                     st.session_state.copy_previous_candidates = []
                     st.session_state.copy_source_loaded = False
                     st.rerun()
+                    
         if st.session_state.get("copy_source_loaded"):
             candidates = st.session_state.get("copy_previous_candidates", [])
             st.markdown("**Choose projects to carry forward:**")
             selected_copy = []
             for ci, rec in enumerate(candidates):
                 checked = st.checkbox(str(rec.get("Project / Dashboard", "Untitled")), value=True, key=f"copy_pick_{ci}")
-                if checked: selected_copy.append(rec)
+                if checked: 
+                    selected_copy.append(rec)
             st.session_state.copy_previous_records = selected_copy
+            
             if st.button("Load Selected Projects", key="load_selected_previous", type="primary"):
-                st.session_state.project_count = max(1, len(selected_copy)); st.rerun()
+                st.session_state.project_count = max(1, len(selected_copy))
+                st.rerun()
             st.caption("Previous-week values are loaded as a starting point only. Review dates, completion, delivery notes and blockers before saving.")
 
         st.markdown('<div class="section-header">03 — Weekly Accomplishments</div>', unsafe_allow_html=True)
@@ -1509,8 +1951,11 @@ if nav_selection == "✍️ Enter Notes":
                 wt_options = ["Development", "Enhancement", "Adhoc", "Migration", "Other"]
                 existing_copy_wt = str(copy_rec.get("Work Type", ""))
                 wt_selection = r3c1.selectbox("Work Type", wt_options, index=wt_options.index(existing_copy_wt) if existing_copy_wt in wt_options else 0, key=f"wt_sel_{i}")
-                if wt_selection == "Other": work_type = r3c1.text_input("Specify Work Type", placeholder="Enter work type...", key=f"work_{i}")
-                else: work_type = wt_selection
+                
+                if wt_selection == "Other": 
+                    work_type = r3c1.text_input("Specify Work Type", placeholder="Enter work type...", key=f"work_{i}")
+                else: 
+                    work_type = wt_selection
                 
                 status_opts = ["On Track", "At Risk", "Blocked", "Completed", "Not Started", "On Hold", "Cancelled"]
                 copy_status = str(copy_rec.get("Status", "On Track"))
@@ -1519,16 +1964,24 @@ if nav_selection == "✍️ Enter Notes":
                 utilization_pct = r3c4.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(pct_value(copy_rec.get("Utilization %", 0))), key=f"util_{i}")
                 
                 c_text1, c_text2 = st.columns(2)
-                this_week = c_text1.text_area("This Week Delivered", value="" if copy_rec else "", placeholder="What was accomplished this week?", height=85, key=f"this_{i}")
+                this_week = c_text1.text_area("This Week Delivered", value=str(copy_rec.get("This Week Delivered", "")), placeholder="What was accomplished this week?", height=85, key=f"this_{i}")
                 next_week = c_text2.text_area("Next Week Priority", value=str(copy_rec.get("Next Week Priority", "")), placeholder="What is the focus for next week?", height=85, key=f"next_{i}")
-                blocker = st.text_area("Blocker / Risks", value="", placeholder="Detail any risks or blockers here. (Leave blank if none)", height=68, key=f"block_{i}")
+                blocker = st.text_area("Blocker / Risks", value=str(copy_rec.get("Blocker", "")), placeholder="Detail any risks or blockers here. (Leave blank if none)", height=68, key=f"block_{i}")
                 
                 projects_to_save.append({
-                    "id": str(uuid.uuid4()), "Project / Dashboard": project, "Business Owner": business_owner,
-                    "Start date": str(start_date) if start_date else "N/A", "Initial Delivery date": str(initial_delivery) if initial_delivery else "N/A",
-                    "Updated Expected Delivery date": str(updated_delivery) if updated_delivery else "N/A", "Work Type": work_type,
-                    "Completion %": f"{completion_pct}%", "Utilization %": f"{utilization_pct}%", "Status": status,
-                    "This Week Delivered": this_week, "Next Week Priority": next_week, "Blocker": blocker
+                    "id": str(uuid.uuid4()), 
+                    "Project / Dashboard": project, 
+                    "Business Owner": business_owner,
+                    "Start date": str(start_date) if start_date else "N/A", 
+                    "Initial Delivery date": str(initial_delivery) if initial_delivery else "N/A",
+                    "Updated Expected Delivery date": str(updated_delivery) if updated_delivery else "N/A", 
+                    "Work Type": work_type,
+                    "Completion %": f"{completion_pct}%", 
+                    "Utilization %": f"{utilization_pct}%", 
+                    "Status": status,
+                    "This Week Delivered": this_week, 
+                    "Next Week Priority": next_week, 
+                    "Blocker": blocker
                 })
 
         col_add, col_rem, _ = st.columns([2, 2, 6])
@@ -1547,43 +2000,60 @@ if nav_selection == "✍️ Enter Notes":
         with sub_col2:
             st.markdown('<div class="marker-nav1-active"></div>', unsafe_allow_html=True)
             if st.button("💾 Save to Google Sheets", type="primary", use_container_width=True):
-                if not resource: st.error("Please enter your Resource Email in Step 2 before saving.")
+                if not resource: 
+                    st.error("Please enter your Resource Email in Step 2 before saving.")
                 else:
                     missing_names = [i + 1 for i, p in enumerate(projects_to_save) if not p["Project / Dashboard"]]
-                    if missing_names: st.error(f"Please enter a Project Name for Project(s): {', '.join(map(str, missing_names))}")
+                    if missing_names: 
+                        st.error(f"Please enter a Project Name for Project(s): {', '.join(map(str, missing_names))}")
                     else:
                         with st.spinner("Saving data to Google Sheets..."):
                             final_entries = []
                             for proj_data in projects_to_save:
-                                full_entry = {"Account": final_account, "Team": final_team, "Year": year, "Month": month, "Week": week, "Resource": resource, "Resource Name": st.session_state.get("current_name", "")}
+                                full_entry = {
+                                    "Account": final_account, "Team": final_team, 
+                                    "Year": year, "Month": month, "Week": week, 
+                                    "Resource": resource, "Resource Name": st.session_state.get("current_name", "")
+                                }
                                 full_entry.update(proj_data)
                                 final_entries.append(full_entry)
                             
-                            # Duplicate protection is additive: user can explicitly choose Save Anyway.
                             existing_df = pd.DataFrame(st.session_state.notes_db) if st.session_state.notes_db else pd.DataFrame()
                             duplicate_keys = set(existing_df.apply(row_submission_key, axis=1)) if not existing_df.empty else set()
                             duplicate_entries = [e for e in final_entries if row_submission_key(e) in duplicate_keys]
+                            
                             if duplicate_entries and not st.session_state.get("allow_duplicate_save", False):
                                 st.session_state.pending_entries = final_entries
                                 st.session_state.duplicate_count = len(duplicate_entries)
                                 st.warning(f"{len(duplicate_entries)} matching weekly submission(s) already exist for this resource/project/week. Choose an action below.")
-                                d1,d2,d3 = st.columns(3)
+                                
+                                d1, d2, d3 = st.columns(3)
                                 with d1:
                                     if st.button("↻ Update Existing", key="dup_update", use_container_width=True):
                                         matches = existing_df[existing_df.apply(lambda r: row_submission_key(r) in {row_submission_key(e) for e in duplicate_entries}, axis=1)]
                                         for _, old in matches.iterrows():
                                             candidate = next((e for e in duplicate_entries if row_submission_key(e)==row_submission_key(old)), None)
-                                            if candidate: update_existing_note_in_gsheets({**old.to_dict(), **candidate, "id": old.get("id")}); write_audit_event("UPDATE_FROM_DUPLICATE_CHECK", old.get("id"), old.to_dict(), candidate)
-                                        st.session_state.notes_db = load_data_from_gsheets(); st.session_state.pending_entries=[]; st.rerun()
+                                            if candidate: 
+                                                update_existing_note_in_gsheets({**old.to_dict(), **candidate, "id": old.get("id")})
+                                                write_audit_event("UPDATE_FROM_DUPLICATE_CHECK", old.get("id"), old.to_dict(), candidate)
+                                        st.session_state.notes_db = load_data_from_gsheets()
+                                        st.session_state.pending_entries = []
+                                        st.rerun()
                                 with d2:
                                     if st.button("＋ Save Anyway", key="dup_save", use_container_width=True):
-                                        st.session_state.allow_duplicate_save = True; st.rerun()
+                                        st.session_state.allow_duplicate_save = True
+                                        st.rerun()
                                 with d3:
                                     if st.button("Cancel", key="dup_cancel", use_container_width=True):
-                                        st.session_state.pending_entries=[]; st.session_state.allow_duplicate_save=False; st.rerun()
+                                        st.session_state.pending_entries = []
+                                        st.session_state.allow_duplicate_save = False
+                                        st.rerun()
                                 st.stop()
+                                
                             save_new_notes_to_gsheets(final_entries)
-                            for entry in final_entries: write_audit_event("CREATE", entry.get("id"), None, entry)
+                            for entry in final_entries: 
+                                write_audit_event("CREATE", entry.get("id"), None, entry)
+                                
                             st.session_state.allow_duplicate_save = False
                             st.session_state.notes_db = load_data_from_gsheets()
                             st.session_state.data_synced = True
@@ -1602,12 +2072,10 @@ elif nav_selection == "📋 Weekly Summary":
     else:
         total_projects = len(filtered_df)
         total_resources = filtered_df["Resource"].nunique()
-        delivered_count = len(filtered_df[filtered_df["This Week Delivered"].fillna("").str.strip() != ""])
+        delivered_count = len(filtered_df[filtered_df["This Week Delivered"].fillna("").astype(str).str.strip() != ""])
         avg_comp = int((filtered_df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100)).mean()) if not filtered_df.empty else 0
-        
         avg_util = resource_utilization(filtered_df) if not filtered_df.empty else 0
-        
-        risk_items = filtered_df[(filtered_df["Status"].isin(["At Risk", "Blocked"])) | (filtered_df["Blocker"].fillna("").str.strip() != "")]
+        risk_items = filtered_df[(filtered_df["Status"].isin(["At Risk", "Blocked"])) | (filtered_df["Blocker"].fillna("").astype(str).str.strip() != "")]
         risk_count = len(risk_items)
 
         st.markdown('<div class="section-header">Executive Summary</div>', unsafe_allow_html=True)
@@ -1627,20 +2095,32 @@ elif nav_selection == "📋 Weekly Summary":
         with s4: st.markdown(render_metric_card("COMPLETION", f"{avg_comp}%"), unsafe_allow_html=True)
         with s5: st.markdown(render_metric_card("UTILIZATION", f"{avg_util}%"), unsafe_allow_html=True)
 
-        # Management intelligence — additive summaries built from the same filtered records.
         hscore, hcounts = portfolio_health(filtered_df)
         hcolor = "#16a34a" if hscore >= 80 else ("#d97706" if hscore >= 60 else "#dc2626")
         overdue = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Overdue")
         due7 = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Next 7 Days")
         slippages = [delivery_slippage_days(r) for _, r in filtered_df.iterrows() if delivery_slippage_days(r) > 0]
         avg_slip = int(round(sum(slippages)/len(slippages))) if slippages else 0
-        st.markdown(f"""<div class='health-strip'><div class='health-title'>Portfolio Health</div><div style='display:flex;align-items:center;gap:18px;margin-top:3px'><div class='health-score'><span class='health-dot' style='background:{hcolor}'></span>{hscore}/100</div><div style='font-size:13px;color:#475569'>Healthy <b>{hcounts.get('Healthy',0)}</b> · Attention <b>{hcounts.get('Attention',0)}</b> · Critical <b>{hcounts.get('Critical',0)}</b></div><div style='font-size:13px;color:#475569;margin-left:auto'>Overdue <b>{overdue}</b> · Due in 7 days <b>{due7}</b> · Avg slippage <b>{avg_slip}d</b></div></div></div>""", unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class='health-strip'>
+            <div class='health-title'>Portfolio Health</div>
+            <div style='display:flex;align-items:center;gap:18px;margin-top:3px'>
+                <div class='health-score'><span class='health-dot' style='background:{hcolor}'></span>{hscore}/100</div>
+                <div style='font-size:13px;color:#475569'>Healthy <b>{hcounts.get('Healthy',0)}</b> · Attention <b>{hcounts.get('Attention',0)}</b> · Critical <b>{hcounts.get('Critical',0)}</b></div>
+                <div style='font-size:13px;color:#475569;margin-left:auto'>Overdue <b>{overdue}</b> · Due in 7 days <b>{due7}</b> · Avg slippage <b>{avg_slip}d</b></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
         st.markdown('<div class="section-header">Delivery Outlook</div>', unsafe_allow_html=True)
         o1,o2,o3,o4,o5 = st.columns(5)
         buckets = Counter(delivery_bucket(r) for _,r in filtered_df.iterrows())
-        for c,label in zip([o1,o2,o3,o4,o5],["OVERDUE","NEXT 7 DAYS","8–14 DAYS","15+ DAYS","DELIVERED"]):
-            key_map={"OVERDUE":"Overdue","NEXT 7 DAYS":"Next 7 Days","8–14 DAYS":"8–14 Days","15+ DAYS":"15+ Days","DELIVERED":"Delivered"}
-            with c: st.markdown(render_metric_card(label, buckets.get(key_map[label],0)), unsafe_allow_html=True)
+        
+        for c,label in zip([o1,o2,o3,o4,o5], ["OVERDUE","NEXT 7 DAYS","8–14 DAYS","15+ DAYS","DELIVERED"]):
+            key_map = {"OVERDUE":"Overdue", "NEXT 7 DAYS":"Next 7 Days", "8–14 DAYS":"8–14 Days", "15+ DAYS":"15+ Days", "DELIVERED":"Delivered"}
+            with c: 
+                st.markdown(render_metric_card(label, buckets.get(key_map[label],0)), unsafe_allow_html=True)
 
         st.markdown('<div class="section-header">Project / Dashboard Status</div>', unsafe_allow_html=True)
         html_lines = [
@@ -1656,7 +2136,18 @@ elif nav_selection == "📋 Weekly Summary":
             elif raw_status == "Completed": pill = "status-completed"
             else: pill = "status-not-started"
             display_status = "In Progress" if raw_status == "At Risk" else raw_status
-            row_html = f"<tr><td>{html_escape(row['Resource'])}</td><td>{html_escape(row['Business Owner'])}</td><td><span class='proj-name'>{html_escape(row['Project / Dashboard'])}</span><span class='work-type'>{html_escape(row['Work Type'])}</span></td><td>{html_escape(row['Updated Expected Delivery date'])}</td><td>{html_escape(row['Completion %'])}</td><td>{html_escape(row['Utilization %'])}</td><td><span class='status-pill {pill}'>{html_escape(display_status)}</span></td></tr>"
+            
+            row_html = (
+                f"<tr>"
+                f"<td>{html_escape(row['Resource'])}</td>"
+                f"<td>{html_escape(row['Business Owner'])}</td>"
+                f"<td><span class='proj-name'>{html_escape(row['Project / Dashboard'])}</span><span class='work-type'>{html_escape(row['Work Type'])}</span></td>"
+                f"<td>{html_escape(row['Updated Expected Delivery date'])}</td>"
+                f"<td>{html_escape(row['Completion %'])}</td>"
+                f"<td>{html_escape(row['Utilization %'])}</td>"
+                f"<td><span class='status-pill {pill}'>{html_escape(display_status)}</span></td>"
+                f"</tr>"
+            )
             html_lines.append(row_html)
         html_lines.append("</tbody></table>")
         st.markdown("".join(html_lines), unsafe_allow_html=True)
@@ -1667,6 +2158,7 @@ elif nav_selection == "📋 Weekly Summary":
         single_week = filter_week[0] if len(filter_week) == 1 else None
         prior_df = get_latest_prior_week(df, single_year, single_month, single_week) if single_year and single_month and single_week else pd.DataFrame()
         movement_df = compare_current_to_prior(filtered_df, prior_df)
+        
         if movement_df.empty:
             st.info("Select exactly one Year, Month and Week to see project-level week-over-week movement.")
         else:
@@ -1675,30 +2167,46 @@ elif nav_selection == "📋 Weekly Summary":
             with mv2: st.markdown(render_metric_card("IMPROVED", int((movement_df["Movement"] == "Improved").sum())), unsafe_allow_html=True)
             with mv3: st.markdown(render_metric_card("DECLINED", int((movement_df["Movement"] == "Declined").sum())), unsafe_allow_html=True)
             with mv4: st.markdown(render_metric_card("STABLE", int((movement_df["Movement"] == "Stable").sum())), unsafe_allow_html=True)
+            
             improved_count = int((movement_df["Movement"] == "Improved").sum())
             declined = movement_df[movement_df["Movement"] == "Declined"]
-            st.markdown(f"<div class='mini-insight'>📌 <b>Management insight:</b> {improved_count} item(s) improved, {len(declined)} declined and {int((movement_df['Movement']=='New').sum())} are new in the selected period.</div>", unsafe_allow_html=True)
+            
+            st.markdown(
+                f"<div class='mini-insight'>📌 <b>Management insight:</b> {improved_count} item(s) improved, "
+                f"{len(declined)} declined and {int((movement_df['Movement']=='New').sum())} are new in the selected period.</div>", 
+                unsafe_allow_html=True
+            )
+            
             if not declined.empty:
                 st.warning("Completion declines of 10+ points were detected in the current selection.")
                 st.dataframe(declined[["Project / Dashboard","Resource","Completion Δ","Status Change"]], use_container_width=True, hide_index=True)
 
         st.markdown('<div class="section-header">Trend & Momentum</div>', unsafe_allow_html=True)
-        tr1,tr2 = st.columns([1.5,6.5])
-        with tr1: trend_periods=st.selectbox("History",[4,8,12],index=1,key="trend_periods",format_func=lambda x:f"Last {x} reported weeks")
-        with tr2: st.caption("Historical performance uses the same weekly records already stored in Google Sheets; no new data source is introduced.")
-        trend_df=historical_trend(df,trend_periods)
-        if trend_df.empty: st.info("Not enough historical weekly data for a trend view.")
-        else: st.dataframe(trend_df,use_container_width=True,hide_index=True)
+        tr1, tr2 = st.columns([1.5, 6.5])
+        with tr1: 
+            trend_periods = st.selectbox("History", [4,8,12], index=1, key="trend_periods", format_func=lambda x:f"Last {x} reported weeks")
+        with tr2: 
+            st.caption("Historical performance uses the same weekly records already stored in Google Sheets; no new data source is introduced.")
+            
+        trend_df = historical_trend(df, trend_periods)
+        if trend_df.empty: 
+            st.info("Not enough historical weekly data for a trend view.")
+        else: 
+            st.dataframe(trend_df, use_container_width=True, hide_index=True)
 
         st.markdown('<div class="section-header">Commitment vs Actual</div>', unsafe_allow_html=True)
-        positive_slip=[delivery_slippage_days(r) for _,r in filtered_df.iterrows() if delivery_slippage_days(r)>0]
-        slip1,slip2,slip3=st.columns(3)
-        with slip1: st.markdown(render_metric_card("REVISED DELIVERY", len(positive_slip)), unsafe_allow_html=True)
-        with slip2: st.markdown(render_metric_card("AVG SLIPPAGE", f"{int(round(sum(positive_slip)/len(positive_slip))) if positive_slip else 0}d"), unsafe_allow_html=True)
-        with slip3: st.markdown(render_metric_card("MAX SLIPPAGE", f"{max(positive_slip) if positive_slip else 0}d"), unsafe_allow_html=True)
+        positive_slip = [delivery_slippage_days(r) for _,r in filtered_df.iterrows() if delivery_slippage_days(r)>0]
+        slip1, slip2, slip3 = st.columns(3)
+        with slip1: 
+            st.markdown(render_metric_card("REVISED DELIVERY", len(positive_slip)), unsafe_allow_html=True)
+        with slip2: 
+            st.markdown(render_metric_card("AVG SLIPPAGE", f"{int(round(sum(positive_slip)/len(positive_slip))) if positive_slip else 0}d"), unsafe_allow_html=True)
+        with slip3: 
+            st.markdown(render_metric_card("MAX SLIPPAGE", f"{max(positive_slip) if positive_slip else 0}d"), unsafe_allow_html=True)
 
         st.markdown('<div class="section-header">Blockers & Risks</div>', unsafe_allow_html=True)
-        if risk_count == 0: st.success("No active blockers or risks reported this week! 🎉")
+        if risk_count == 0: 
+            st.success("No active blockers or risks reported this week! 🎉")
         else:
             for _, row in risk_items.iterrows():
                 blocker_text = row['Blocker'] if row['Blocker'] else f"Status marked as: {row['Status']}"
@@ -1714,150 +2222,153 @@ elif nav_selection == "📈 Executive Report":
         st.markdown('<div class="section-header">Portfolio Management View</div>', unsafe_allow_html=True)
         hscore, hcounts = portfolio_health(filtered_df)
         ec1, ec2, ec3, ec4 = st.columns([2, 2, 2, 4])
-        with ec1:
+        with ec1: 
             st.caption(f"{len(filtered_df)} project update(s) in current selection")
-        with ec2:
+        with ec2: 
             st.caption(f"{sum(1 for _, r in filtered_df.iterrows() if classify_attention(r)[0] == 'Critical')} critical item(s)")
-        with ec3:
+        with ec3: 
             st.caption(f"Portfolio health: {hscore}/100")
         with ec4:
             compact_mode = st.toggle("Compact executive view", value=st.session_state.get("executive_compact", False), key="executive_compact_toggle", help="Switch between the detailed project cards and a dense management table.")
             st.session_state.executive_compact = compact_mode
+            
         if st.session_state.executive_compact:
-            compact_rows=[]
+            compact_rows = []
             for _, r in filtered_df.iterrows():
-                hs=health_score(r)
-                compact_rows.append({"Account":r.get("Account",""),"Team":r.get("Team",""),"Project":r.get("Project / Dashboard",""),"Owner":r.get("Business Owner",""),"Status":r.get("Status",""),"Completion":r.get("Completion %",""),"Delivery":delivery_state(r),"Health":f"{hs}/100 · {health_label(hs)}","Risk":suggested_action(r) if classify_attention(r)[0] != "Normal" else "—"})
+                hs = health_score(r)
+                compact_rows.append({
+                    "Account": r.get("Account",""),
+                    "Team": r.get("Team",""),
+                    "Project": r.get("Project / Dashboard",""),
+                    "Owner": r.get("Business Owner",""),
+                    "Status": r.get("Status",""),
+                    "Completion": r.get("Completion %",""),
+                    "Delivery": delivery_state(r),
+                    "Health": f"{hs}/100 · {health_label(hs)}",
+                    "Risk": suggested_action(r) if classify_attention(r)[0] != "Normal" else "—"
+                })
             st.dataframe(pd.DataFrame(compact_rows), use_container_width=True, hide_index=True)
         else:
-          for account_name in filtered_df["Account"].unique():
-            st.markdown(f"<div class='acc-header'>🏢 {account_name}</div>", unsafe_allow_html=True)
-            account_data = filtered_df[filtered_df["Account"] == account_name]
-            for team_name in account_data["Team"].unique():
-                st.markdown(f"<div class='team-header'>{team_name}</div>", unsafe_allow_html=True)
-                team_data = account_data[account_data["Team"] == team_name]
-                for resource_name in team_data["Resource"].unique():
-                    resource_data = team_data[team_data["Resource"] == resource_name]
-                    with st.expander(f"👤 {resource_name} ({len(resource_data)} updates)", expanded=True):
-                        for index, row in resource_data.iterrows():
-                            rec_id = row.get('id')
-                            if st.session_state.edit_id == rec_id:
-                                with st.container(border=True):
-                                    st.markdown(f"<div class='edit-banner'>✏️ Editing: {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
-                                    e_r1c1, e_r1c2, e_r1c3 = st.columns(3)
-                                    e_proj = e_r1c1.text_input("Project Name", value=row.get('Project / Dashboard', ''), key=f"ep_{rec_id}")
-                                    e_bo = e_r1c2.text_input("Business Owner", value=row.get('Business Owner', ''), key=f"ebo_{rec_id}")
-                                    wt_options = ["Development", "Enhancement", "Adhoc", "Migration", "Other"]
-                                    existing_wt = row.get('Work Type', '')
-                                    wt_idx = wt_options.index(existing_wt) if existing_wt in wt_options else 4
-                                    e_wt_sel = e_r1c3.selectbox("Work Type", wt_options, index=wt_idx, key=f"ewtsel_{rec_id}")
-                                    if e_wt_sel == "Other": e_wt = e_r1c3.text_input("Specify Work Type", value=existing_wt if existing_wt not in wt_options else "", key=f"ewt_{rec_id}")
-                                    else: e_wt = e_wt_sel
+            for account_name in filtered_df["Account"].dropna().unique():
+                st.markdown(f"<div class='acc-header'>🏢 {account_name}</div>", unsafe_allow_html=True)
+                account_data = filtered_df[filtered_df["Account"] == account_name]
+                
+                for team_name in account_data["Team"].dropna().unique():
+                    st.markdown(f"<div class='team-header'>{team_name}</div>", unsafe_allow_html=True)
+                    team_data = account_data[account_data["Team"] == team_name]
+                    
+                    for resource_name in team_data["Resource"].dropna().unique():
+                        resource_data = team_data[team_data["Resource"] == resource_name]
+                        with st.expander(f"👤 {resource_name} ({len(resource_data)} updates)", expanded=True):
+                            for index, row in resource_data.iterrows():
+                                rec_id = row.get('id')
+                                
+                                if st.session_state.edit_id == rec_id:
+                                    with st.container(border=True):
+                                        st.markdown(f"<div class='edit-banner'>✏️ Editing: {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
+                                        e_r1c1, e_r1c2, e_r1c3 = st.columns(3)
                                         
-                                    e_r2c1, e_r2c2, e_r2c3 = st.columns(3)
-                                    e_start = e_r2c1.date_input("Start Date", value=parse_date(row.get('Start date')), key=f"esd_{rec_id}")
-                                    e_init = e_r2c2.date_input("Initial Delivery", value=parse_date(row.get('Initial Delivery date')), key=f"eid_{rec_id}")
-                                    e_upd = e_r2c3.date_input("Updated Delivery", value=parse_date(row.get('Updated Expected Delivery date')), key=f"eud_{rec_id}")
-                                    e_r3c1, e_r3c2, e_r3c3 = st.columns(3)
-                                    status_opts = ["On Track", "At Risk", "Blocked", "Completed", "Not Started", "On Hold", "Cancelled"]
-                                    curr_status = row.get('Status', 'On Track')
-                                    if curr_status not in status_opts: curr_status = "On Track"
-                                    e_status = e_r3c1.selectbox("Status", status_opts, index=status_opts.index(curr_status), key=f"estat_{rec_id}")
-                                    e_comp = e_r3c2.number_input("Completion %", min_value=0, max_value=100, step=5, value=int(str(row.get('Completion %', '0')).replace('%','')), key=f"ecomp_{rec_id}")
-                                    e_util = e_r3c3.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(str(row.get('Utilization %', '0')).replace('%','')), key=f"eutil_{rec_id}")
-                                    e_tw = st.text_area("This Week Delivered", value=row.get('This Week Delivered', ''), height=85, key=f"etw_{rec_id}")
-                                    e_nw = st.text_area("Next Week Priority", value=row.get('Next Week Priority', ''), height=85, key=f"enw_{rec_id}")
-                                    e_block = st.text_area("Blocker / Risks", value=row.get('Blocker', ''), height=68, key=f"eb_{rec_id}")
-                                    st.divider()
-                                    e_btn_c1, e_btn_c2, _ = st.columns([2, 2, 6])
-                                    with e_btn_c1:
-                                        if st.button("💾 Save Changes", type="primary", key=f"esave_{rec_id}", use_container_width=True):
-                                            if not user_can_edit_row(row):
-                                                st.error("Authorization failed. This record was not changed.")
-                                            else:
-                                                updated_data = {
-                                                    "id": rec_id, "Account": account_name, "Team": team_name, "Year": row.get("Year"), "Month": row.get("Month"), "Week": row.get("Week"), "Resource": resource_name, "Resource Name": row.get("Resource Name", st.session_state.get("current_name", "")),
-                                                    "Project / Dashboard": e_proj, "Business Owner": e_bo, "Work Type": e_wt,
-                                                    "Start date": str(e_start) if e_start else "N/A", "Initial Delivery date": str(e_init) if e_init else "N/A", "Updated Expected Delivery date": str(e_upd) if e_upd else "N/A",
-                                                    "Status": e_status, "Completion %": f"{e_comp}%", "Utilization %": f"{e_util}%",
-                                                    "This Week Delivered": e_tw, "Next Week Priority": e_nw, "Blocker": e_block
-                                                }
-                                                with st.spinner("Updating Google Sheets..."):
-                                                    update_existing_note_in_gsheets(updated_data)
-                                                    write_audit_event("UPDATE", rec_id, row.to_dict(), updated_data)
-                                                    st.session_state.notes_db = load_data_from_gsheets()
-                                                    st.session_state.data_synced = True
-                                                    st.session_state.last_refresh_at = datetime.now(IST)
-                                                st.session_state.edit_id = None
-                                                st.session_state.show_success = True
-                                                st.session_state.success_message = "Cloud update saved successfully."
-                                                st.rerun()
-                                    with e_btn_c2:
-                                        if st.button("Cancel", key=f"ecancel_{rec_id}", use_container_width=True):
-                                            st.session_state.edit_id = None; st.rerun()
-                            else:
-                                with st.container(border=True):
-                                    h_col1, h_col2 = st.columns([9, 1])
-                                    with h_col1:
-                                        st.markdown(f"<div class='card-title'> {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {html_escape(row.get('Business Owner',''))} &nbsp;|&nbsp; <b>Type:</b> {html_escape(row.get('Work Type',''))}</span>", unsafe_allow_html=True)
-                                    with h_col2:
-                                        # --- SMART SECURITY LOGIC FOR EDIT BUTTON ---
-                                        can_edit = False
-                                        curr_role = st.session_state.get("current_role", "")
-                                        curr_email = st.session_state.get("current_email", "").strip().lower()
-                                        curr_scope = [s.strip().lower() for s in st.session_state.get("current_scope", "").split(",") if s.strip()]
-                                        curr_acc_scope = [s.strip().lower() for s in st.session_state.get("current_acc_scope", "").split(",") if s.strip()]
+                                        e_proj = e_r1c1.text_input("Project Name", value=row.get('Project / Dashboard', ''), key=f"ep_{rec_id}")
+                                        e_bo = e_r1c2.text_input("Business Owner", value=row.get('Business Owner', ''), key=f"ebo_{rec_id}")
                                         
-                                        row_team = str(row.get("Team", "")).strip().lower()
-                                        row_acc = str(row.get("Account", "")).strip().lower()
-                                        row_email = str(row.get("Resource", "")).strip().lower()
+                                        wt_options = ["Development", "Enhancement", "Adhoc", "Migration", "Other"]
+                                        existing_wt = row.get('Work Type', '')
+                                        wt_idx = wt_options.index(existing_wt) if existing_wt in wt_options else 4
                                         
-                                        if curr_role == "Admin":
-                                            can_edit = True
-                                        elif curr_role == "Account Manager" and row_acc in curr_scope:
-                                            can_edit = True
-                                        elif curr_role == "Team Lead" and row_team in curr_scope and row_acc in curr_acc_scope:
-                                            can_edit = True
-                                        elif row_email == curr_email:
-                                            can_edit = True
+                                        e_wt_sel = e_r1c3.selectbox("Work Type", wt_options, index=wt_idx, key=f"ewtsel_{rec_id}")
+                                        if e_wt_sel == "Other": 
+                                            e_wt = e_r1c3.text_input("Specify Work Type", value=existing_wt if existing_wt not in wt_options else "", key=f"ewt_{rec_id}")
+                                        else: 
+                                            e_wt = e_wt_sel
                                             
-                                        if can_edit:
-                                            if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
-                                                if user_can_edit_row(row):
-                                                    st.session_state.edit_id = rec_id; st.rerun()
+                                        e_r2c1, e_r2c2, e_r2c3 = st.columns(3)
+                                        e_start = e_r2c1.date_input("Start Date", value=parse_date(row.get('Start date')), key=f"esd_{rec_id}")
+                                        e_init = e_r2c2.date_input("Initial Delivery", value=parse_date(row.get('Initial Delivery date')), key=f"eid_{rec_id}")
+                                        e_upd = e_r2c3.date_input("Updated Delivery", value=parse_date(row.get('Updated Expected Delivery date')), key=f"eud_{rec_id}")
+                                        
+                                        e_r3c1, e_r3c2, e_r3c3 = st.columns(3)
+                                        status_opts = ["On Track", "At Risk", "Blocked", "Completed", "Not Started", "On Hold", "Cancelled"]
+                                        curr_status = row.get('Status', 'On Track')
+                                        if curr_status not in status_opts: 
+                                            curr_status = "On Track"
+                                            
+                                        e_status = e_r3c1.selectbox("Status", status_opts, index=status_opts.index(curr_status), key=f"estat_{rec_id}")
+                                        e_comp = e_r3c2.number_input("Completion %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Completion %', '0'))), key=f"ecomp_{rec_id}")
+                                        e_util = e_r3c3.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Utilization %', '0'))), key=f"eutil_{rec_id}")
+                                        
+                                        e_tw = st.text_area("This Week Delivered", value=str(row.get('This Week Delivered', '')), height=85, key=f"etw_{rec_id}")
+                                        e_nw = st.text_area("Next Week Priority", value=str(row.get('Next Week Priority', '')), height=85, key=f"enw_{rec_id}")
+                                        e_block = st.text_area("Blocker / Risks", value=str(row.get('Blocker', '')), height=68, key=f"eb_{rec_id}")
+                                        
+                                        st.divider()
+                                        e_btn_c1, e_btn_c2, _ = st.columns([2, 2, 6])
+                                        with e_btn_c1:
+                                            if st.button("💾 Save Changes", type="primary", key=f"esave_{rec_id}", use_container_width=True):
+                                                if not user_can_edit_row(row):
+                                                    st.error("Authorization failed. This record was not changed.")
                                                 else:
-                                                    st.error("You are not authorized to edit this record.")
-                                        else:
-                                            st.markdown("<div style='color:#94a3b8; font-size:12px; text-align:center; padding-top:10px;'>🔒 View Only</div>", unsafe_allow_html=True)
+                                                    updated_data = {
+                                                        "id": rec_id, "Account": account_name, "Team": team_name, "Year": row.get("Year"), "Month": row.get("Month"), "Week": row.get("Week"), "Resource": resource_name, "Resource Name": row.get("Resource Name", st.session_state.get("current_name", "")),
+                                                        "Project / Dashboard": e_proj, "Business Owner": e_bo, "Work Type": e_wt,
+                                                        "Start date": str(e_start) if e_start else "N/A", "Initial Delivery date": str(e_init) if e_init else "N/A", "Updated Expected Delivery date": str(e_upd) if e_upd else "N/A",
+                                                        "Status": e_status, "Completion %": f"{e_comp}%", "Utilization %": f"{e_util}%",
+                                                        "This Week Delivered": e_tw, "Next Week Priority": e_nw, "Blocker": e_block
+                                                    }
+                                                    with st.spinner("Updating Google Sheets..."):
+                                                        update_existing_note_in_gsheets(updated_data)
+                                                        write_audit_event("UPDATE", rec_id, row.to_dict(), updated_data)
+                                                        st.session_state.notes_db = load_data_from_gsheets()
+                                                        st.session_state.data_synced = True
+                                                        st.session_state.last_refresh_at = datetime.now(IST)
+                                                    st.session_state.edit_id = None
+                                                    st.session_state.show_success = True
+                                                    st.session_state.success_message = "Cloud update saved successfully."
+                                                    st.rerun()
+                                        with e_btn_c2:
+                                            if st.button("Cancel", key=f"ecancel_{rec_id}", use_container_width=True):
+                                                st.session_state.edit_id = None
+                                                st.rerun()
+                                else:
+                                    with st.container(border=True):
+                                        h_col1, h_col2 = st.columns([9, 1])
+                                        with h_col1:
+                                            st.markdown(f"<div class='card-title'> {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {html_escape(row.get('Business Owner',''))} &nbsp;|&nbsp; <b>Type:</b> {html_escape(row.get('Work Type',''))}</span>", unsafe_allow_html=True)
+                                        with h_col2:
+                                            if user_can_edit_row(row):
+                                                if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
+                                                    st.session_state.edit_id = rec_id
+                                                    st.rerun()
+                                            else:
+                                                st.markdown("<div style='color:#94a3b8; font-size:12px; text-align:center; padding-top:10px;'>🔒 View Only</div>", unsafe_allow_html=True)
 
-                                    c1, c2, c3 = st.columns([2, 2, 1])
-                                    with c1:
-                                        st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>THIS WEEK DELIVERED</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('This Week Delivered','')) if row.get('This Week Delivered') else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Start: <b>{row['Start date']}</b></div>", unsafe_allow_html=True)
-                                    with c2:
-                                        st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>NEXT WEEK PRIORITY</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('Next Week Priority','')) if row.get('Next Week Priority') else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Expected Delivery: <b>{row['Updated Expected Delivery date']}</b></div>", unsafe_allow_html=True)
-                                    with c3:
-                                        st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>METRICS</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between;'><span>Completion</span><b>{row['Completion %']}</b></div>", unsafe_allow_html=True)
-                                        st.progress(get_pct_decimal(row['Completion %']))
-                                        st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{row['Utilization %']}</b></div>", unsafe_allow_html=True)
-                                        st.progress(get_pct_decimal(row['Utilization %']))
-                                    # Delivery intelligence and data-quality cues.
-                                    d_state = delivery_state(row)
-                                    d_flags = data_quality_flags(row)
-                                    if d_state.startswith("Overdue"):
-                                        st.markdown(f"<div class='risk-box' style='margin-top:10px'><div class='risk-title'>⏰ {html_escape(d_state)}</div><div class='risk-desc'>Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div></div>", unsafe_allow_html=True)
-                                    elif d_state.startswith("Due in"):
-                                        st.markdown(f"<div class='edit-banner' style='margin-top:10px'>📅 <b>{html_escape(d_state)}</b> · Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div>", unsafe_allow_html=True)
-                                    if d_flags:
-                                        st.markdown(f"<div class='edit-banner' style='margin-top:10px'>🧹 <b>Data quality:</b> {html_escape('; '.join(d_flags))}</div>", unsafe_allow_html=True)
+                                        c1, c2, c3 = st.columns([2, 2, 1])
+                                        with c1:
+                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>THIS WEEK DELIVERED</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('This Week Delivered','')) if str(row.get('This Week Delivered','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Start: <b>{html_escape(row.get('Start date',''))}</b></div>", unsafe_allow_html=True)
+                                        with c2:
+                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>NEXT WEEK PRIORITY</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('Next Week Priority','')) if str(row.get('Next Week Priority','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Expected Delivery: <b>{html_escape(row.get('Updated Expected Delivery date',''))}</b></div>", unsafe_allow_html=True)
+                                        with c3:
+                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>METRICS</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between;'><span>Completion</span><b>{html_escape(row.get('Completion %',''))}</b></div>", unsafe_allow_html=True)
+                                            st.progress(get_pct_decimal(row.get('Completion %','')))
+                                            st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{html_escape(row.get('Utilization %',''))}</b></div>", unsafe_allow_html=True)
+                                            st.progress(get_pct_decimal(row.get('Utilization %','')))
+                                        
+                                        d_state = delivery_state(row)
+                                        d_flags = data_quality_flags(row)
+                                        if d_state.startswith("Overdue"):
+                                            st.markdown(f"<div class='risk-box' style='margin-top:10px'><div class='risk-title'>⏰ {html_escape(d_state)}</div><div class='risk-desc'>Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div></div>", unsafe_allow_html=True)
+                                        elif d_state.startswith("Due in"):
+                                            st.markdown(f"<div class='edit-banner' style='margin-top:10px'>📅 <b>{html_escape(d_state)}</b> · Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div>", unsafe_allow_html=True)
+                                        if d_flags:
+                                            st.markdown(f"<div class='edit-banner' style='margin-top:10px'>🧹 <b>Data quality:</b> {html_escape('; '.join(d_flags))}</div>", unsafe_allow_html=True)
 
-                                    if row["Blocker"] and str(row["Blocker"]).strip().lower() not in ["none", "na", "n/a", ""]:
-                                        st.markdown(f"<div class='alert-card alert-danger' style='margin-top:14px; margin-bottom:0;'><div class='alert-title'>⚠ Blocker</div><div class='alert-desc'>{html_escape(row.get('Blocker',''))}</div></div>", unsafe_allow_html=True)
+                                        if str(row.get("Blocker","")).strip().lower() not in ["none", "na", "n/a", ""]:
+                                            st.markdown(f"<div class='alert-card alert-danger' style='margin-top:14px; margin-bottom:0; background:#fef2f2; border-left:4px solid #dc2626; padding:10px;'><div class='alert-title' style='font-weight:bold; color:#b91c1c;'>⚠ Blocker</div><div class='alert-desc' style='font-size:13px; color:#450a0a;'>{html_escape(row.get('Blocker',''))}</div></div>", unsafe_allow_html=True)
 
 # =========================================================
 # VIEW 4: ACTION CENTER
@@ -1869,6 +2380,7 @@ elif nav_selection == "🚦 Action Center":
         action_items = build_action_items(filtered_df if not filtered_df.empty else df)
         critical = [x for x in action_items if x["Priority"] == "Critical"]
         attention = [x for x in action_items if x["Priority"] == "Attention"]
+        
         a1, a2, a3, a4 = st.columns(4)
         with a1: st.markdown(render_metric_card("CRITICAL", len(critical)), unsafe_allow_html=True)
         with a2: st.markdown(render_metric_card("ATTENTION", len(attention)), unsafe_allow_html=True)
@@ -1885,12 +2397,13 @@ elif nav_selection == "🚦 Action Center":
         st.markdown('<div class="section-header">Resource Health & Workload</div>', unsafe_allow_html=True)
         resource_rows=[]
         for resource, grp in (filtered_df if not filtered_df.empty else df).groupby("Resource"):
-            avg_c=int(round(sum(pct_value(x) for x in grp["Completion %"])/max(1,len(grp))))
-            avg_u=int(round(sum(pct_value(x) for x in grp["Utilization %"])/max(1,len(grp))))
-            criticals=sum(1 for _,r in grp.iterrows() if classify_attention(r)[0]=="Critical")
-            workload="High" if avg_u >= 85 else ("Low" if avg_u < 50 else "Balanced")
+            avg_c = int(round(sum(pct_value(x) for x in grp["Completion %"])/max(1,len(grp))))
+            avg_u = int(round(sum(pct_value(x) for x in grp["Utilization %"])/max(1,len(grp))))
+            criticals = sum(1 for _,r in grp.iterrows() if classify_attention(r)[0]=="Critical")
+            workload = "High" if avg_u >= 85 else ("Low" if avg_u < 50 else "Balanced")
             resource_rows.append({"Resource":resource,"Projects":len(grp),"Avg Completion":f"{avg_c}%","Avg Utilization":f"{avg_u}%","Critical":criticals,"Workload":workload})
-        if resource_rows: st.dataframe(pd.DataFrame(resource_rows), use_container_width=True, hide_index=True)
+        if resource_rows: 
+            st.dataframe(pd.DataFrame(resource_rows), use_container_width=True, hide_index=True)
 
         st.markdown('<div class="section-header">Submission Compliance</div>', unsafe_allow_html=True)
         scope_df = filtered_df if not filtered_df.empty else df

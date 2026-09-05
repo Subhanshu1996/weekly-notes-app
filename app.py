@@ -519,7 +519,6 @@ if 'success_message' not in st.session_state:
 if 'edit_id' not in st.session_state: 
     st.session_state.edit_id = None
 if 'nav_selection' not in st.session_state: 
-    # Default explicitly to 'Enter Notes'
     st.session_state.nav_selection = "✍️ Enter Notes"
 if 'show_send_dialog' not in st.session_state: 
     st.session_state.show_send_dialog = None
@@ -1276,8 +1275,8 @@ def create_pdf_report(dataframe, header_title):
         pdf.ln(5)
         y0 = pdf.get_y()
         pdf.set_fill_color(37, 99, 235)
-        pdf.rect(15, y0 + 1, 2.5, 7, "F")
-        pdf.set_xy(19, y0)
+        pdf.rect(13.5, y0 + 1, 1.0, 6, "F")  # OUTDENTED THIN LINE (1mm width, placed at 13.5mm)
+        pdf.set_xy(15, y0)                   # TEXT STRICTLY ALIGNED AT 15mm
         pdf.set_text_color(22, 50, 79)
         pdf.set_font("Arial", "B", 13)
         pdf.cell(170, 8, safe_pdf_text(title), ln=True)
@@ -1573,7 +1572,7 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, d
     
     if dataframe is not None and not dataframe.empty:
         html_content = generate_html_email_body(dataframe, report_title)
-        msg.set_content(f"Please find attached the {report_title}. The email contains the leadership summary; the attached PDF contains the detailed report.")
+        msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
         msg.add_alternative(html_content, subtype='html')
         
         if os.path.exists("logo.png") and "cid:factspan_logo" in html_content:
@@ -1854,6 +1853,7 @@ if st.session_state.get("show_send_dialog"):
                 cc_list = [x.strip() for x in cc_value.replace(";", ",").split(",") if x.strip()]
                 with st.spinner("Generating leadership email and PDF report..."):
                     current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
+                    current_html = generate_html_email_body(filtered_df, subject_value)
                     
                 if current_pdf is None: 
                     st.error("PDF generation unavailable.")

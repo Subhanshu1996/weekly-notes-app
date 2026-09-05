@@ -38,8 +38,6 @@ except ImportError:
 # APP CONFIGURATION & TIMEZONE
 # =========================================================
 st.set_page_config(page_title="Weekly Project Report", page_icon="📈", layout="wide")
-
-# Set global timezone to IST
 IST = ZoneInfo("Asia/Kolkata")
 
 # =========================================================
@@ -52,30 +50,23 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 def update_user_password_in_gsheets(email, new_hashed_pwd):
-    """Updates a user's password hash in the Users tab."""
     try:
         client = get_gspread_client()
         spreadsheet = client.open("Weekly Notes Database")
         u_sheet = spreadsheet.worksheet("Users")
         records = u_sheet.get_all_records()
         headers = u_sheet.row_values(1)
-        
-        if "Password_Hash" not in headers:
-            return False
-            
+        if "Password_Hash" not in headers: return False
         col_idx = headers.index("Password_Hash") + 1
-        
         for idx, row in enumerate(records):
             if str(row.get("Email", "")).strip().lower() == email.strip().lower():
                 row_idx = idx + 2 
                 u_sheet.update_cell(row_idx, col_idx, new_hashed_pwd)
                 return True
         return False
-    except Exception as e:
-        return False
+    except Exception as e: return False
 
 def send_otp_email(recipient_email, otp, context="Password Reset"):
-    """Sends a 6-digit OTP for email verification or password reset."""
     cfg = st.secrets if hasattr(st, "secrets") else {}
     host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
     port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
@@ -84,8 +75,7 @@ def send_otp_email(recipient_email, otp, context="Password Reset"):
     sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
     use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
     
-    if not host or not sender: 
-        return False, "Email sending is not configured in secrets."
+    if not host or not sender: return False, "Email sending is not configured in secrets."
     
     msg = EmailMessage()
     msg["Subject"] = f"{context} - Weekly Project Report"
@@ -99,11 +89,10 @@ def send_otp_email(recipient_email, otp, context="Password Reset"):
             if username and password: server.login(username, password)
             server.send_message(msg)
         return True, "OTP sent successfully."
-    except Exception as exc: 
-        return False, f"Unable to send email: {exc}"
+    except Exception as exc: return False, f"Unable to send email: {exc}"
 
 # =========================================================
-# SECURITY & ROLE-BASED LOGIN / REGISTRATION SCREEN
+# SECURITY & ROLE-BASED LOGIN / REGISTRATION SCREEN (RESTORED)
 # =========================================================
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -124,23 +113,18 @@ if not st.session_state.authenticated:
     
     tab1, tab2, tab3 = st.tabs(["🔐 Log In", "📝 Create Account", "🔑 Forgot Password"])
     
-    # --- TAB 1: LOG IN ---
     with tab1:
         log_email = st.text_input("Company Email", key="log_email", placeholder="name@company.com").strip().lower()
         log_pwd = st.text_input("Password", type="password", key="log_pwd", placeholder="Your personal password")
         
         if st.button("Log In", type="primary", use_container_width=True):
-            if not log_email or not log_pwd:
-                st.error("Please enter your email and password.")
+            if not log_email or not log_pwd: st.error("Please enter your email and password.")
             else:
                 with st.spinner("Authenticating..."):
                     client = get_gspread_client()
                     spreadsheet = client.open("Weekly Notes Database")
-                    try:
-                        u_sheet = spreadsheet.worksheet("Users")
-                        records = u_sheet.get_all_records()
-                    except Exception:
-                        records = []
+                    try: u_sheet = spreadsheet.worksheet("Users"); records = u_sheet.get_all_records()
+                    except Exception: records = []
                     
                     user = next((r for r in records if str(r.get("Email", "")).strip().lower() == log_email), None)
                     hashed_attempt = hashlib.sha256(log_pwd.encode()).hexdigest()
@@ -153,73 +137,54 @@ if not st.session_state.authenticated:
                         st.session_state.current_scope = str(user.get("Scope", ""))
                         st.session_state.current_acc_scope = str(user.get("Account_Scope", ""))
                         st.rerun()
-                    else:
-                        st.error("Invalid email or password.")
+                    else: st.error("Invalid email or password.")
                         
-    # --- TAB 2: CREATE ACCOUNT (WITH OTP VERIFICATION) ---
     with tab2:
         if not st.session_state.reg_otp:
             reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
             reg_email = st.text_input("Company Email", key="reg_email", placeholder="name@company.com").strip().lower()
             reg_role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"], key="reg_role")
             
-            reg_acc_scope = ""
-            reg_scope = ""
+            reg_acc_scope, reg_scope = "", ""
             if reg_role == "Team Lead":
                 reg_acc_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp", key="reg_acc_scope").strip()
-                reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team (comma-separated)", key="reg_scope").strip()
+                reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team", key="reg_scope").strip()
             elif reg_role == "Account Manager":
-                reg_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex (comma-separated)", key="reg_scope2").strip()
+                reg_scope = st.text_input("Your Account(s)", placeholder="e.g. Acme Corp, Globex", key="reg_scope2").strip()
                 
             c1, c2 = st.columns(2)
             with c1: reg_pwd = st.text_input("Create Password", type="password", key="reg_pwd")
             with c2: reg_pwd2 = st.text_input("Confirm Password", type="password", key="reg_pwd2")
-            
             st.divider()
             
             reg_invite = ""
             if reg_role != "Team Member":
-                reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter the secret code for this role...", key="reg_invite")
-            else:
-                st.caption("✨ Team Members can register directly without an invite code.")
+                reg_invite = st.text_input(f"{reg_role} Invite Code", type="password", placeholder="Enter secret code...", key="reg_invite")
+            else: st.caption("✨ Team Members can register directly without an invite code.")
             
             if st.button("Send Verification Code", type="primary", use_container_width=True):
-                if not reg_name:
-                    st.error("Please enter your name.")
-                elif not reg_email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", reg_email):
-                    st.error("Please enter a valid company email address.")
-                elif reg_role == "Team Lead" and (not reg_acc_scope or not reg_scope):
-                    st.error("Please enter both your Account and Team scope.")
-                elif reg_role == "Account Manager" and not reg_scope:
-                    st.error("Please enter your Account(s) scope.")
-                elif len(reg_pwd) < 6:
-                    st.error("Password must be at least 6 characters.")
-                elif reg_pwd != reg_pwd2:
-                    st.error("Passwords do not match.")
+                if not reg_name: st.error("Please enter your name.")
+                elif not reg_email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", reg_email): st.error("Please enter a valid company email address.")
+                elif reg_role == "Team Lead" and (not reg_acc_scope or not reg_scope): st.error("Please enter both your Account and Team scope.")
+                elif reg_role == "Account Manager" and not reg_scope: st.error("Please enter your Account(s) scope.")
+                elif len(reg_pwd) < 6: st.error("Password must be at least 6 characters.")
+                elif reg_pwd != reg_pwd2: st.error("Passwords do not match.")
                 else:
                     invite_valid = False
-                    if reg_role == "Team Member":
-                        invite_valid = True
+                    if reg_role == "Team Member": invite_valid = True
                     else:
                         password_keys = {"Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
                         req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
-                        
-                        if not req_invite:
-                            st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
-                        elif reg_invite != req_invite:
-                            st.error(f"Invalid Invite Code for the {reg_role} role.")
-                        else:
-                            invite_valid = True
+                        if not req_invite: st.error(f"Configuration error: {password_keys[reg_role]} is not set.")
+                        elif reg_invite != req_invite: st.error(f"Invalid Invite Code for the {reg_role} role.")
+                        else: invite_valid = True
                     
                     if invite_valid:
                         with st.spinner("Checking details..."):
                             client = get_gspread_client()
                             spreadsheet = client.open("Weekly Notes Database")
-                            try:
-                                u_sheet = spreadsheet.worksheet("Users")
-                                records = u_sheet.get_all_records()
-                            except Exception:
-                                records = []
+                            try: u_sheet = spreadsheet.worksheet("Users"); records = u_sheet.get_all_records()
+                            except Exception: records = []
                             
                             if any(str(r.get("Email","")).strip().lower() == reg_email for r in records):
                                 st.error("An account with this email already exists. Please log in.")
@@ -228,81 +193,54 @@ if not st.session_state.authenticated:
                                 ok, msg = send_otp_email(reg_email, otp, context="Account Verification")
                                 if ok:
                                     st.session_state.reg_otp = otp
-                                    st.session_state.reg_details = {
-                                        "name": reg_name, "email": reg_email, "role": reg_role,
-                                        "scope": reg_scope, "acc_scope": reg_acc_scope, "pwd": reg_pwd
-                                    }
+                                    st.session_state.reg_details = {"name": reg_name, "email": reg_email, "role": reg_role, "scope": reg_scope, "acc_scope": reg_acc_scope, "pwd": reg_pwd}
                                     st.rerun()
-                                else:
-                                    st.error(msg)
+                                else: st.error(msg)
         else:
             st.success(f"Verification code sent to {st.session_state.reg_details['email']}")
             reg_entered_otp = st.text_input("Enter 6-digit OTP", key="reg_entered_otp", placeholder="000000")
             st.divider()
-            
             rc1, rc2 = st.columns(2)
             with rc1:
                 if st.button("Verify & Create Account", type="primary", use_container_width=True):
-                    if reg_entered_otp.strip() != st.session_state.reg_otp:
-                        st.error("Invalid verification code.")
+                    if reg_entered_otp.strip() != st.session_state.reg_otp: st.error("Invalid verification code.")
                     else:
                         with st.spinner("Creating your account securely..."):
                             client = get_gspread_client()
                             spreadsheet = client.open("Weekly Notes Database")
-                            try:
-                                u_sheet = spreadsheet.worksheet("Users")
+                            try: u_sheet = spreadsheet.worksheet("Users")
                             except Exception:
                                 u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
                                 u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
-                            
                             hashed_pw = hashlib.sha256(st.session_state.reg_details['pwd'].encode()).hexdigest()
-                            u_sheet.append_row([
-                                st.session_state.reg_details['email'], 
-                                st.session_state.reg_details['name'], 
-                                st.session_state.reg_details['role'], 
-                                st.session_state.reg_details['scope'], 
-                                st.session_state.reg_details['acc_scope'], 
-                                hashed_pw
-                            ])
-                            
+                            u_sheet.append_row([st.session_state.reg_details['email'], st.session_state.reg_details['name'], st.session_state.reg_details['role'], st.session_state.reg_details['scope'], st.session_state.reg_details['acc_scope'], hashed_pw])
                             st.session_state.authenticated = True
                             st.session_state.current_email = st.session_state.reg_details['email']
                             st.session_state.current_name = st.session_state.reg_details['name']
                             st.session_state.current_role = st.session_state.reg_details['role']
                             st.session_state.current_scope = st.session_state.reg_details['scope']
                             st.session_state.current_acc_scope = st.session_state.reg_details['acc_scope']
-                            
-                            st.session_state.reg_otp = None
-                            st.session_state.reg_details = None
+                            st.session_state.reg_otp, st.session_state.reg_details = None, None
                             st.rerun()
             with rc2:
                 if st.button("Cancel", use_container_width=True):
-                    st.session_state.reg_otp = None
-                    st.session_state.reg_details = None
+                    st.session_state.reg_otp, st.session_state.reg_details = None, None
                     st.rerun()
 
-    # --- TAB 3: FORGOT PASSWORD ---
     with tab3:
         if not st.session_state.reset_otp:
             st.markdown("<p style='font-size:14px; color:#475569;'>Enter your registered email address to receive a secure 6-digit reset code.</p>", unsafe_allow_html=True)
             reset_email_input = st.text_input("Registered Company Email", key="reset_email_in", placeholder="name@company.com").strip().lower()
-            
             if st.button("Send OTP", use_container_width=True):
-                if not reset_email_input:
-                    st.error("Please enter your email.")
+                if not reset_email_input: st.error("Please enter your email.")
                 else:
                     with st.spinner("Verifying account..."):
                         client = get_gspread_client()
                         spreadsheet = client.open("Weekly Notes Database")
-                        try:
-                            u_sheet = spreadsheet.worksheet("Users")
-                            records = u_sheet.get_all_records()
-                        except Exception:
-                            records = []
-                        
+                        try: u_sheet = spreadsheet.worksheet("Users"); records = u_sheet.get_all_records()
+                        except Exception: records = []
                         user = next((r for r in records if str(r.get("Email", "")).strip().lower() == reset_email_input), None)
-                        if not user:
-                            st.error("No account found with this email.")
+                        if not user: st.error("No account found with this email.")
                         else:
                             otp = str(random.randint(100000, 999999))
                             ok, msg = send_otp_email(reset_email_input, otp, context="Password Reset")
@@ -311,42 +249,35 @@ if not st.session_state.authenticated:
                                 st.session_state.reset_email = reset_email_input
                                 st.success(f"An OTP has been securely sent to {reset_email_input}")
                                 st.rerun()
-                            else:
-                                st.error(msg)
+                            else: st.error(msg)
         else:
             st.success(f"OTP sent to {st.session_state.reset_email}")
             entered_otp = st.text_input("Enter 6-digit OTP", key="entered_otp", placeholder="000000")
             st.divider()
             new_pwd1 = st.text_input("New Password", type="password", key="new_pwd1", placeholder="At least 6 characters")
             new_pwd2 = st.text_input("Confirm New Password", type="password", key="new_pwd2")
-            
             rc1, rc2 = st.columns(2)
             with rc1:
                 if st.button("Reset Password", type="primary", use_container_width=True):
-                    if entered_otp.strip() != st.session_state.reset_otp:
-                        st.error("Invalid OTP.")
-                    elif len(new_pwd1) < 6:
-                        st.error("Password must be at least 6 characters.")
-                    elif new_pwd1 != new_pwd2:
-                        st.error("Passwords do not match.")
+                    if entered_otp.strip() != st.session_state.reset_otp: st.error("Invalid OTP.")
+                    elif len(new_pwd1) < 6: st.error("Password must be at least 6 characters.")
+                    elif new_pwd1 != new_pwd2: st.error("Passwords do not match.")
                     else:
                         with st.spinner("Updating password securely..."):
                             hashed_pw = hashlib.sha256(new_pwd1.encode()).hexdigest()
                             success = update_user_password_in_gsheets(st.session_state.reset_email, hashed_pw)
                             if success:
                                 st.success("Password updated successfully! Please switch to the Log In tab.")
-                                st.session_state.reset_otp = None
-                                st.session_state.reset_email = None
-                            else:
-                                st.error("Failed to update password. Please try again.")
+                                st.session_state.reset_otp, st.session_state.reset_email = None, None
+                            else: st.error("Failed to update password. Please try again.")
             with rc2:
                 if st.button("Cancel Reset", use_container_width=True):
-                    st.session_state.reset_otp = None
-                    st.session_state.reset_email = None
+                    st.session_state.reset_otp, st.session_state.reset_email = None, None
                     st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
+
 
 def load_data_from_gsheets():
     try:
@@ -454,7 +385,6 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .action-critical { background:#fef2f2; border:1px solid #fecaca; border-left:5px solid #dc2626; padding:12px 14px; border-radius:10px; margin:8px 0; }
 .action-attention { background:#fffbeb; border:1px solid #fde68a; border-left:5px solid #d97706; padding:12px 14px; border-radius:10px; margin:8px 0; }
 hr { margin: 12px 0 !important; border-color:#e6ebf1 !important; }
-
 .filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
 .filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
 .filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
@@ -497,348 +427,175 @@ if st.session_state.notes_db:
             st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].unique().tolist()
 
 # =========================================================
-# HELPERS
+# NEW CENTRALIZED REPORT ENGINE
 # =========================================================
-def current_period_label(df):
-    if df.empty: return "Current selection"
-    years = sorted(df["Year"].astype(str).unique()) if "Year" in df else []
-    months = list(df["Month"].astype(str).unique()) if "Month" in df else []
-    weeks = list(df["Week"].astype(str).unique()) if "Week" in df else []
-    if len(years)==1 and len(months)==1 and len(weeks)==1: return f"{months[0]} {years[0]} · {weeks[0]}"
-    return "Current selection"
 
-def html_escape(value):
-    return html.escape("" if value is None else str(value))
-
-def safe_pdf_text(value):
-    text = "" if value is None else str(value)
-    replacements = {"–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", "•":"-", "✓":"OK", "⚠":"!", "×":"x"}
-    for old, new in replacements.items(): text = text.replace(old, new)
-    return text.encode("latin-1", "replace").decode("latin-1")
-
-def get_pct_decimal(pct_str):
-    try: return float(str(pct_str).replace('%', '').strip()) / 100.0
-    except Exception: return 0.0
-
-def get_status_icon(status):
-    icons = {"On Track": "●", "At Risk": "●", "Blocked": "●", "Completed": "●", "Not Started": "●"}
-    return icons.get(status, "●")
-
-def render_metric_card(label, value):
-    return f'<div class="kpi-card"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>'
-
-def format_badge_text(selected_list, all_options):
-    if not selected_list: return "All"
-    if len(selected_list) == len(all_options): return "All"
-    if len(selected_list) <= 2: return ", ".join(map(str, selected_list))
-    return f"{len(selected_list)} selected"
-
-def parse_date(date_str):
-    if not date_str or str(date_str).strip() in ["N/A", "None", ""]: return None
-    try: return datetime.strptime(str(date_str), "%Y-%m-%d").date()
-    except Exception: return None
-    
-def pct_value(value):
-    try: return max(0.0, min(100.0, float(str(value).replace("%", "").strip())))
-    except Exception: return 0.0
-
-def normalize_text(value):
-    return str(value or "").strip().lower()
-
-def is_blank(value):
-    return normalize_text(value) in {"", "none", "na", "n/a", "nan"}
-
-def user_can_edit_row(row):
-    role = st.session_state.get("current_role", "")
-    email = normalize_text(st.session_state.get("current_email", ""))
-    scopes = [normalize_text(x) for x in st.session_state.get("current_scope", "").split(",") if normalize_text(x)]
-    acc_scopes = [normalize_text(x) for x in st.session_state.get("current_acc_scope", "").split(",") if normalize_text(x)]
-    row_team, row_acc, row_email = normalize_text(row.get("Team")), normalize_text(row.get("Account")), normalize_text(row.get("Resource"))
-    if role == "Admin": return True
-    if role == "Account Manager": return row_acc in scopes
-    if role == "Team Lead": return row_team in scopes and row_acc in acc_scopes
-    return row_email == email
-
-def row_submission_key(row):
-    return "|".join(normalize_text(row.get(k)) for k in ["Account","Team","Resource","Project / Dashboard","Year","Month","Week"])
-
-def date_from_row(row):
-    return parse_date(row.get("Updated Expected Delivery date"))
-
-def delivery_state(row, as_of=None):
-    as_of = as_of or datetime.now(IST).date()
-    status = normalize_text(row.get("Status"))
-    if status == "completed": return "Delivered"
-    due = date_from_row(row)
-    if not due: return "No Date"
-    delta = (due - as_of).days
-    if delta < 0: return f"Overdue {abs(delta)}d"
-    if delta <= 7: return f"Due in {delta}d"
-    return "Upcoming"
-
-def delivery_bucket(row, as_of=None):
-    as_of = as_of or datetime.now(IST).date()
-    due = date_from_row(row)
-    if normalize_text(row.get("Status")) == "completed": return "Delivered"
-    if not due: return "No Date"
-    days = (due - as_of).days
-    if days < 0: return "Overdue"
-    if days <= 7: return "Next 7 Days"
-    if days <= 14: return "8–14 Days"
-    return "15+ Days"
-
-def health_score(row, as_of=None):
-    as_of = as_of or datetime.now(IST).date()
-    score = 100
-    status = normalize_text(row.get("Status"))
-    comp = pct_value(row.get("Completion %"))
-    due = date_from_row(row)
-    if status == "blocked": score -= 35
-    elif status == "at risk": score -= 25
-    elif status == "on hold": score -= 15
-    if due and status != "completed":
-        days = (due - as_of).days
-        if days < 0: score -= 25
-        elif days <= 7: score -= 10
-    if comp >= 100 and status != "completed": score -= 15
-    if status == "completed" and comp < 100: score -= 15
-    if is_blank(row.get("This Week Delivered")): score -= 8
-    if status in {"at risk","blocked"} and is_blank(row.get("Blocker")): score -= 7
-    if pct_value(row.get("Utilization %")) > 100: score -= 10
-    return max(0, min(100, int(score)))
-
-def health_label(score):
-    return "Healthy" if score >= 80 else ("Attention" if score >= 60 else "Critical")
-
-def data_quality_flags(row):
-    flags = []
-    status = normalize_text(row.get("Status"))
-    comp = pct_value(row.get("Completion %"))
-    due = date_from_row(row)
-    if status == "completed" and comp < 100: flags.append("Completed but completion is below 100%")
-    if comp >= 100 and status != "completed": flags.append("Completion is 100% but status is not Completed")
-    if status in {"at risk", "blocked"} and is_blank(row.get("Blocker")): flags.append("Risk/blocked status without a blocker explanation")
-    start = parse_date(row.get("Start date"))
-    initial = parse_date(row.get("Initial Delivery date"))
-    if start and initial and initial < start: flags.append("Initial delivery date is before start date")
-    if start and due and due < start: flags.append("Updated delivery date is before start date")
-    if status == "cancelled" and comp > 0: flags.append("Cancelled item has non-zero completion")
-    if status == "not started" and comp > 0: flags.append("Not Started item has non-zero completion")
-    if status == "completed" and due and due > datetime.now(IST).date(): flags.append("Completed item has a future delivery date")
-    if due and status != "completed" and due < datetime.now(IST).date(): flags.append("Expected delivery date is overdue")
-    if is_blank(row.get("This Week Delivered")): flags.append("No weekly delivery update reported")
-    util = pct_value(row.get("Utilization %"))
-    if util > 100: flags.append("Utilization exceeds 100%")
-    if is_blank(row.get("Business Owner")): flags.append("Business owner is missing")
-    if is_blank(row.get("Next Week Priority")): flags.append("Next-week priority is missing")
-    return flags
-
-def classify_attention(row, as_of=None):
-    as_of = as_of or datetime.now(IST).date()
-    status = normalize_text(row.get("Status"))
-    reasons = []
-    priority = "Normal"
-    if status == "blocked":
-        priority = "Critical"; reasons.append("Blocked")
-    elif status == "at risk":
-        priority = "Critical"; reasons.append("At Risk")
-    elif status == "on hold":
-        priority = "Attention"; reasons.append("On Hold")
-    due = date_from_row(row)
-    if due and status != "completed":
-        days = (due - as_of).days
-        if days < 0:
-            priority = "Critical"; reasons.append(f"Overdue by {abs(days)} day(s)")
-        elif days <= 7:
-            if priority == "Normal": priority = "Attention"
-            reasons.append(f"Due in {days} day(s)")
-    dq = data_quality_flags(row)
-    if dq:
-        if priority == "Normal": priority = "Attention"
-        reasons.extend(dq)
-    return priority, reasons
-
-def suggested_action(row):
-    priority, reasons = classify_attention(row)
-    status = normalize_text(row.get("Status"))
-    if priority == "Critical":
-        if status == "blocked": return "Remove blocker / escalate dependency and confirm recovery date."
-        if "overdue" in " ".join(reasons).lower(): return "Confirm recovery plan and revised delivery commitment."
-        return "Review project health with owner and agree on immediate corrective action."
-    if priority == "Attention":
-        if "data quality" in " ".join(reasons).lower(): return "Correct missing or inconsistent weekly reporting fields."
-        return "Monitor closely and confirm next-week priority."
-    return "No action required."
-
-def portfolio_health(df):
-    if df.empty: return 0, Counter()
-    labels = [health_label(health_score(r)) for _, r in df.iterrows()]
-    return int(sum(health_score(r) for _, r in df.iterrows()) / len(df)), Counter(labels)
-
-def resource_utilization(df):
-    if df.empty or "Resource" not in df.columns: return 0
+def _report_period_label(dataframe):
+    if dataframe is None or dataframe.empty: return "Current Selection"
     vals = []
-    for _, group in df.groupby("Resource"):
-        nums = [pct_value(v) for v in group["Utilization %"]]
-        if nums: vals.append(sum(nums)/len(nums))
-    return int(round(sum(vals)/len(vals))) if vals else 0
+    for col in ["Year", "Month", "Week"]:
+        if col in dataframe.columns:
+            unique = [str(v) for v in dataframe[col].dropna().unique() if not is_blank(v)]
+            if len(unique) == 1: vals.append(unique[0])
+    return " · ".join(vals) if vals else "Current Selection"
 
-def delivery_slippage_days(row):
-    initial, updated = parse_date(row.get("Initial Delivery date")), parse_date(row.get("Updated Expected Delivery date"))
-    if initial and updated: return (updated-initial).days
-    return 0
+def _report_scope_text(dataframe):
+    if dataframe is None or dataframe.empty: return "No records in the current selection"
+    accounts = dataframe["Account"].nunique() if "Account" in dataframe.columns else 0
+    teams = dataframe["Team"].nunique() if "Team" in dataframe.columns else 0
+    return f"{len(dataframe)} update(s) · {accounts} account(s) · {teams} team(s)"
 
-def historical_trend(df, periods=8):
-    if df.empty or not {"Year","Month","Week"}.issubset(df.columns): return pd.DataFrame()
-    month_order={m:i for i,m in enumerate(["January","February","March","April","May","June","July","August","September","October","November","December"],1)}
-    w=df.copy(); w["_y"]=pd.to_numeric(w["Year"],errors="coerce"); w["_m"]=w["Month"].map(month_order); w["_w"]=pd.to_numeric(w["Week"].astype(str).str.extract(r"(\d+)")[0],errors="coerce"); w["_p"]=w["_y"]*100+w["_m"]*10+w["_w"]; w=w.dropna(subset=["_p"]).sort_values("_p")
-    rows=[]
-    for period,g in w.groupby("_p",sort=True):
-        if len(rows)>=periods and period not in w["_p"].tail(periods).unique(): continue
-        label=f"{g['Month'].iloc[0]} {int(g['Year'].iloc[0])} · {g['Week'].iloc[0]}"
-        rows.append({"Period":label,"Projects":len(g),"Resources":g["Resource"].nunique(),"Avg Completion":round(sum(pct_value(x) for x in g["Completion %"])/max(1,len(g)),1),"Avg Utilization":resource_utilization(g),"Critical":sum(1 for _,r in g.iterrows() if classify_attention(r)[0]=="Critical"),"Overdue":sum(1 for _,r in g.iterrows() if delivery_bucket(r)=="Overdue")})
-    return pd.DataFrame(rows[-periods:])
+def _risk_dataframe(dataframe):
+    if dataframe is None or dataframe.empty: return pd.DataFrame()
+    status = dataframe.get("Status", pd.Series(index=dataframe.index, dtype=object)).fillna("").astype(str).str.strip()
+    blocker = dataframe.get("Blocker", pd.Series(index=dataframe.index, dtype=object)).fillna("").astype(str).str.strip()
+    return dataframe.loc[status.isin(["At Risk", "Blocked", "On Hold"]) | blocker.ne("")].copy()
 
-def write_audit_event(action, row_id, old_row=None, new_row=None):
-    try:
-        client = get_gspread_client()
-        spreadsheet = client.open("Weekly Notes Database")
-        try: sheet = spreadsheet.worksheet("Audit Log")
-        except Exception:
-            sheet = spreadsheet.add_worksheet(title="Audit Log", rows=1000, cols=8)
-            sheet.append_row(["Timestamp","Action","Record ID","User Name","User Email","Role","Before","After"])
-        sheet.append_row([datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"), action, str(row_id), st.session_state.get("current_name",""), st.session_state.get("current_email",""), st.session_state.get("current_role",""), str(old_row or {}), str(new_row or {})])
-    except Exception: pass
-
-def get_latest_prior_week(df, selected_year=None, selected_month=None, selected_week=None):
-    if df.empty or not {"Year", "Month", "Week"}.issubset(df.columns): return pd.DataFrame()
-    work = df.copy()
-    month_order = {m: i for i, m in enumerate(["January","February","March","April","May","June","July","August","September","October","November","December"], 1)}
-    work["_year"] = pd.to_numeric(work["Year"], errors="coerce"); work["_month_num"] = work["Month"].map(month_order); work["_week_num"] = pd.to_numeric(work["Week"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
-    work["_period"] = work["_year"] * 100 + work["_month_num"] * 10 + work["_week_num"]
-    if selected_year is None or selected_month is None or selected_week is None: return pd.DataFrame()
-    current_month_num = month_order.get(str(selected_month))
-    current_week_num_match = re.search(r"(\d+)", str(selected_week))
-    current_week_num = int(current_week_num_match.group(1)) if current_week_num_match else None
-    if current_month_num is None or current_week_num is None: return pd.DataFrame()
-    current_period = int(selected_year) * 100 + current_month_num * 10 + current_week_num
-    prior = work[work["_period"] < current_period]
-    if prior.empty: return pd.DataFrame()
-    prior_period = prior["_period"].max()
-    return prior[prior["_period"] == prior_period].drop(columns=["_year","_month_num","_week_num","_period"], errors="ignore")
-
-def compare_current_to_prior(current_df, prior_df):
-    if current_df.empty or prior_df.empty: return pd.DataFrame()
-    prior_map = {row_project_key(row): row for _, row in prior_df.iterrows()}
-    records = []
-    for _, row in current_df.iterrows():
-        key = row_project_key(row)
-        prev = prior_map.get(key)
-        if prev is None:
-            movement = "New"; comp_delta = None; util_delta = None; status_change = "New this period"
-        else:
-            comp_delta = pct_value(row.get("Completion %")) - pct_value(prev.get("Completion %"))
-            util_delta = pct_value(row.get("Utilization %")) - pct_value(prev.get("Utilization %"))
-            prev_status = str(prev.get("Status", "")); curr_status = str(row.get("Status", ""))
-            status_change = f"{prev_status} → {curr_status}" if prev_status != curr_status else "No status change"
-            if comp_delta >= 10: movement = "Improved"
-            elif comp_delta <= -10: movement = "Declined"
-            else: movement = "Stable"
-        records.append({"Project / Dashboard": row.get("Project / Dashboard", ""), "Resource": row.get("Resource", ""), "Movement": movement, "Completion Δ": comp_delta, "Utilization Δ": util_delta, "Status Change": status_change})
-    return pd.DataFrame(records)
-
-def build_action_items(dataframe):
-    items = []
-    if dataframe.empty: return items
+def _delivery_outlook(dataframe, as_of=None):
+    as_of = as_of or datetime.now(IST).date()
+    result = {"Overdue": 0, "Next 7 Days": 0, "8-14 Days": 0, "15+ Days": 0, "Completed": 0, "No Date": 0}
+    if dataframe is None or dataframe.empty: return result
     for _, row in dataframe.iterrows():
-        priority, reasons = classify_attention(row)
-        if priority != "Normal":
-            items.append({"Priority": priority, "Project / Dashboard": row.get("Project / Dashboard", ""), "Account": row.get("Account", ""), "Team": row.get("Team", ""), "Resource": row.get("Resource", ""), "Status": row.get("Status", ""), "Delivery": delivery_state(row), "Reason": "; ".join(dict.fromkeys(reasons)), "Recommended Action": suggested_action(row)})
-    rank = {"Critical": 0, "Attention": 1, "Normal": 2}
-    items.sort(key=lambda x: (rank.get(x["Priority"], 9), x["Project / Dashboard"]))
-    return items
+        status = normalize_text(row.get("Status"))
+        if status == "completed": result["Completed"] += 1; continue
+        due = date_from_row(row)
+        if not due: result["No Date"] += 1; continue
+        days = (due - as_of).days
+        if days < 0: result["Overdue"] += 1
+        elif days <= 7: result["Next 7 Days"] += 1
+        elif days <= 14: result["8-14 Days"] += 1
+        else: result["15+ Days"] += 1
+    return result
 
-def refresh_cloud_data(show_message=True):
-    with st.spinner("Refreshing data from Google Sheets..."):
-        latest = load_data_from_gsheets()
-    if latest:
-        st.session_state.notes_db = latest; st.session_state.data_synced = True
-        if show_message: st.success(f"Data refreshed successfully — {len(latest)} record(s) loaded.")
-    else: st.warning("Refresh returned no records. Existing session data was retained.")
-    st.session_state.accounts_db = {}
-    if st.session_state.notes_db:
-        live_df = pd.DataFrame(st.session_state.notes_db)
-        if "Account" in live_df.columns and "Team" in live_df.columns:
-            for acc in live_df["Account"].dropna().unique():
-                st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].dropna().unique().tolist()
+def _avg_completion(dataframe):
+    if dataframe is None or dataframe.empty or "Completion %" not in dataframe.columns: return 0
+    return int(round(dataframe["Completion %"].apply(pct_value).mean()))
 
-def generate_html_email_body(df, report_title):
-    total_projects = len(df)
-    delivered = int((df["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not df.empty else 0
-    avg_comp = int(df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not df.empty else 0
-    risks = int(((df["Status"].isin(["At Risk", "Blocked"])) | (df["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not df.empty else 0
-    date_str = datetime.now(IST).strftime("%d %b %Y")
+def _avg_utilization(dataframe):
+    if dataframe is None or dataframe.empty or "Utilization %" not in dataframe.columns: return 0
+    work = dataframe.assign(_util=dataframe["Utilization %"].apply(pct_value))
+    if "Resource" in work.columns:
+        values = work.groupby("Resource")["_util"].mean()
+        return int(round(values.mean())) if not values.empty else 0
+    return int(round(work["_util"].mean()))
 
-    accounts = list(df["Account"].dropna().unique()) if "Account" in df else []
-    teams = list(df["Team"].dropna().unique()) if "Team" in df else []
+def _portfolio_health(dataframe):
+    if dataframe is None or dataframe.empty: return 0
+    total = max(len(dataframe), 1)
+    risks = len(_risk_dataframe(dataframe))
+    overdue = _delivery_outlook(dataframe)["Overdue"]
+    score = 70 + (_avg_completion(dataframe) * 0.25) - (risks / total * 18) - (overdue / total * 22)
+    return int(max(0, min(100, round(score))))
+
+def _health_label(score):
+    return "Healthy" if score >= 80 else "Attention" if score >= 60 else "Critical"
+
+def _leadership_takeaway(dataframe, movement_df=None):
+    if dataframe is None or dataframe.empty: return "No records are available for the selected reporting period."
+    total = len(dataframe); resources = dataframe["Resource"].nunique() if "Resource" in dataframe.columns else 0
+    risks = len(_risk_dataframe(dataframe)); out = _delivery_outlook(dataframe); health = _portfolio_health(dataframe)
+    text = f"Portfolio health is {health}/100 ({_health_label(health).lower()}) across {total} update(s) and {resources} resource(s), with average initiative completion at {_avg_completion(dataframe)}%. "
+    text += f"{risks} item(s) require risk or blocker attention. " if risks else "No active risk/blocker items are currently flagged. "
+    if out["Overdue"] or out["Next 7 Days"]: text += f"Delivery outlook includes {out['Overdue']} overdue and {out['Next 7 Days']} item(s) due within 7 days. "
+    if movement_df is not None and not movement_df.empty:
+        improved, declined = int((movement_df["Movement"] == "Improved").sum()), int((movement_df["Movement"] == "Declined").sum())
+        if improved or declined: text += f"WoW movement shows {improved} improved and {declined} declined item(s)."
+    return text
+
+def _build_report_model(dataframe, report_title):
+    data = dataframe.copy() if dataframe is not None else pd.DataFrame()
+    prior_df = pd.DataFrame()
+    if not data.empty and {"Year", "Month", "Week"}.issubset(data.columns):
+        ys, ms, ws = [data[c].dropna().unique().tolist() for c in ["Year", "Month", "Week"]]
+        if len(ys) == len(ms) == len(ws) == 1: prior_df = get_latest_prior_week(data, ys[0], ms[0], ws[0])
+    movement_df = compare_current_to_prior(data, prior_df)
+    actions = build_action_items(data); risks_df = _risk_dataframe(data)
+    updates = int(data["This Week Delivered"].fillna("").astype(str).str.strip().ne("").sum()) if "This Week Delivered" in data.columns else 0
+    kpis = {
+        "projects": len(data), "resources": int(data["Resource"].nunique()) if not data.empty and "Resource" in data.columns else 0,
+        "updates": updates, "completion": _avg_completion(data), "utilization": _avg_utilization(data),
+        "health": _portfolio_health(data), "critical": sum(x["Priority"] == "Critical" for x in actions),
+        "attention": sum(x["Priority"] == "Attention" for x in actions), "risks": len(risks_df)
+    }
+    mc = {k: int((movement_df["Movement"] == k).sum()) for k in ["New", "Improved", "Declined", "Stable"]} if not movement_df.empty else {k: 0 for k in ["New", "Improved", "Declined", "Stable"]}
+    highlights, priorities = [], []
+    for _, row in data.iterrows():
+        project = str(row.get("Project / Dashboard", "")).strip()
+        delivered = str(row.get("This Week Delivered", "")).strip()
+        nxt = str(row.get("Next Week Priority", "")).strip()
+        if project and delivered and delivered.lower() not in {"none", "none reported", "n/a"}: highlights.append((project, delivered))
+        if project and nxt and nxt.lower() not in {"none", "none reported", "n/a"}: priorities.append((project, nxt))
+    
+    accounts = list(data["Account"].dropna().unique()) if "Account" in data else []
+    teams = list(data["Team"].dropna().unique()) if "Team" in data else []
     acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
     team_str = teams[0] if len(teams) == 1 else "Summary"
-    account_team_str = html_escape(f"{acc_str} - {team_str}")
+    account_team_str = f"{acc_str} - {team_str}"
+    
+    return {
+        "title": report_title, "account_team_str": account_team_str, "period": _report_period_label(data), "scope": _report_scope_text(data),
+        "generated": datetime.now(IST), "data": data, "prior": prior_df, "movement": movement_df,
+        "actions": actions, "risks_df": risks_df, "outlook": _delivery_outlook(data), "kpis": kpis,
+        "movement_counts": mc, "health_label": _health_label(kpis["health"]),
+        "takeaway": _leadership_takeaway(data, movement_df), "highlights": highlights[:10], "priorities": priorities[:10]
+    }
 
-    table_rows = ""
-    for _, row in df.iterrows():
-        proj = html_escape(row.get("Project / Dashboard", ""))
-        owner = html_escape(row.get("Business Owner", ""))
+# =========================================================
+# EMAIL HTML REPORT GENERATOR
+# =========================================================
+def _email_status_class(status):
+    s = normalize_text(status)
+    if s == "completed": return "success"
+    if s == "blocked": return "critical"
+    if s in {"at risk", "on hold"}: return "warning"
+    if s == "on track": return "info"
+    return "neutral"
+
+def generate_html_report(report):
+    k, m, o = report["kpis"], report["movement_counts"], report["outlook"]
+    data = report["data"]
+    esc = lambda v: html_escape(v)
+    
+    logo_src = "cid:factspan_logo" if os.path.exists("logo.png") else EMAIL_LOGO_URL
+    logo_html = f'<img src="{logo_src}" alt="FACTSPAN" width="200" style="display: block; border: 0; max-width: 100%; height: auto;" />'
+
+    rows = []
+    for _, r in data.head(20).iterrows():
+        status = str(r.get("Status", ""))
+        comp = int(pct_value(r.get("Completion %")))
+        status_color = "#16a34a" if normalize_text(status) == "completed" else ("#ea580c" if normalize_text(status) in ["at risk", "in progress", "on hold"] else ("#dc2626" if normalize_text(status) == "blocked" else "#64748b"))
         
-        # Elegant Name Extraction for Email HTML to prevent squishing
-        raw_name = str(row.get("Resource Name", "")).strip()
-        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
-            res = html_escape(raw_name)
-        else:
-            email_val = str(row.get("Resource", "")).strip()
-            res = html_escape(email_val.split('@')[0].replace('.', ' ').title())
-            
-        status = html_escape(row.get("Status", "On Track"))
-        comp = int(pct_value(row.get("Completion %")))
-        due = html_escape(row.get("Updated Expected Delivery date", "N/A"))
-        status_color = "#16a34a" if status == "Completed" else ("#ea580c" if status in ["At Risk", "In Progress"] else ("#dc2626" if status == "Blocked" else "#64748b"))
+        raw_name = str(r.get("Resource Name", "")).strip()
+        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]: res = raw_name
+        else: res = str(r.get("Resource", "")).strip().split('@')[0].replace('.', ' ').title()
 
-        table_rows += f"""
+        rows.append(f'''
         <tr>
-            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
-                <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
+                <strong>{esc(r.get("Project / Dashboard", ""))}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {esc(r.get("Business Owner", ""))}</span>
             </td>
-            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{res}</td>
-            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
-                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}% Completed</div>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{esc(res)}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
+                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}%</div>
                 <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
                     <div style="background-color: {status_color}; width: {comp}%; height: 100%;"></div>
                 </div>
             </td>
-            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
-            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{esc(r.get("Updated Expected Delivery date", ""))}</td>
+            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{esc(status)}</td>
         </tr>
-        """
+        ''')
+        
+    table_html = "".join(rows) if rows else '<tr><td colspan="5" style="padding: 14px 12px; text-align: center; color: #64748b;">No records in current selection.</td></tr>'
 
-    highlights_html = ""
-    action_items = build_action_items(df)
-    critical_items = [x for x in action_items if x["Priority"] == "Critical"]
-    
-    if critical_items:
-        for item in critical_items[:4]:
-            highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item['Project / Dashboard'])}:</strong> {html_escape(item['Reason'])}. <em>Action: {html_escape(item['Recommended Action'])}</em></li>"""
-    else:
-        recent_updates = df[df["This Week Delivered"].astype(str).str.strip() != ""].head(4)
-        if not recent_updates.empty:
-            for _, row in recent_updates.iterrows():
-                highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row.get('Project / Dashboard', 'N/A'))}:</strong> {html_escape(row.get('This Week Delivered', ''))}</li>"""
-        else:
-            highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
-            
-    logo_src = "cid:logo_img" if os.path.exists("logo.png") else EMAIL_LOGO_URL
+    actions = []
+    for item in report["actions"][:6]:
+        critical = item["Priority"] == "Critical"
+        action = "Escalate dependency and confirm recovery plan." if critical else "Confirm owner commitment and next milestone."
+        actions.append(f'<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{esc(item["Project / Dashboard"])}:</strong> {esc(item["Reason"])}. <em>Action: {esc(action)}</em></li>')
+    action_html = "".join(actions) if actions else '<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>'
 
-    # Using robust Mobile CSS for Phone Compatability
-    html_body = f"""
+    return f'''
     <!DOCTYPE html>
     <html>
     <head>
@@ -862,12 +619,12 @@ def generate_html_email_body(df, report_title):
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
                 <tr>
                     <td class="mobile-stack" width="40%" valign="middle" align="left">
-                        <img src="{logo_src}" alt="FACTSPAN" width="200" class="logo-img" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
+                        {logo_html}
                     </td>
                     <td class="mobile-stack" width="60%" align="right" valign="middle">
                         <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
-                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
-                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
+                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{esc(report["account_team_str"])}</div>
+                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {report["generated"].strftime('%d %b %Y')}</div>
                     </td>
                 </tr>
             </table>
@@ -875,29 +632,29 @@ def generate_html_email_body(df, report_title):
             <div style="padding: 25px;">
                 <p style="color: #334155; font-size: 14px; margin-top: 0;">Hi Team,</p>
                 <p style="color: #475569; font-size: 14px; line-height: 1.6; margin-bottom: 25px;">
-                    Please find below the latest weekly progress snapshot for <strong>{account_team_str}</strong>.
+                    Please find below the latest weekly progress snapshot for <strong>{esc(report["account_team_str"])}</strong>.
                 </p>
                 <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
                 
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 25px;">
                     <tr>
                         <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
-                            <div style="font-size: 28px; font-weight: bold; color: #1e293b; font-family: Arial, sans-serif;">{total_projects}</div>
+                            <div style="font-size: 28px; font-weight: bold; color: #1e293b; font-family: Arial, sans-serif;">{k["projects"]}</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
                         </td>
                         <td class="mobile-hide" width="2%"></td>
                         <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
-                            <div style="font-size: 28px; font-weight: bold; color: #16a34a; font-family: Arial, sans-serif;">{delivered}</div>
+                            <div style="font-size: 28px; font-weight: bold; color: #16a34a; font-family: Arial, sans-serif;">{k["updates"]}</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">UPDATES</div>
                         </td>
                         <td class="mobile-hide" width="2%"></td>
                         <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fffbeb;">
-                            <div style="font-size: 28px; font-weight: bold; color: #ea580c; font-family: Arial, sans-serif;">{avg_comp}%</div>
+                            <div style="font-size: 28px; font-weight: bold; color: #ea580c; font-family: Arial, sans-serif;">{k["completion"]}%</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">COMPLETION</div>
                         </td>
                         <td class="mobile-hide" width="2%"></td>
                         <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fef2f2;">
-                            <div style="font-size: 28px; font-weight: bold; color: #dc2626; font-family: Arial, sans-serif;">{risks}</div>
+                            <div style="font-size: 28px; font-weight: bold; color: #dc2626; font-family: Arial, sans-serif;">{k["risks"]}</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">RISKS</div>
                         </td>
                     </tr>
@@ -915,7 +672,7 @@ def generate_html_email_body(df, report_title):
                             </tr>
                         </thead>
                         <tbody>
-                            {table_rows}
+                            {table_html}
                         </tbody>
                     </table>
                 </div>
@@ -923,14 +680,14 @@ def generate_html_email_body(df, report_title):
                 <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px; margin-bottom: 30px;">
                     <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
                     <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.6;">
-                        {highlights_html}
+                        {action_html}
                     </ul>
                 </div>
             </div>
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #1e293b; padding: 15px 25px;">
                 <tr>
                     <td class="footer-text" align="left" style="color: #f1f5f9; font-size: 11px;">
-                        Factspan &bull; {account_team_str}
+                        Factspan &bull; {esc(report["account_team_str"])}
                     </td>
                     <td class="footer-text" align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">
                         Staying Relevant and Ahead through Fluid Intelligence
@@ -940,19 +697,69 @@ def generate_html_email_body(df, report_title):
         </div>
     </body>
     </html>
-    """
-    return html_body
+    '''
+
+# =========================================================
+# PDF REPORT GENERATOR
+# =========================================================
+def _pdf_safe(value):
+    text = "" if value is None else str(value)
+    for a,b in {"–":"-","—":"-","’":"'","“":'"',"”":'"',"•":"-","✓":"OK","⚠":"!","→":"->","₹":"Rs ","…":"..."}.items(): text=text.replace(a,b)
+    return text.encode("latin-1","replace").decode("latin-1")
+
+def _pdf_section(pdf, title):
+    y = pdf.get_y() + 3
+    pdf.set_fill_color(37, 99, 235); pdf.rect(15, y+1, 2.2, 7, "F")
+    pdf.set_xy(19, y); pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 13); pdf.cell(170, 8, _pdf_safe(title), ln=True); pdf.ln(1)
+
+def _pdf_lines(pdf, text, width, size=8.2, max_lines=4):
+    text=_pdf_safe(text); words=text.split(); pdf.set_font("Arial","",size)
+    if not words: return [""]
+    lines=[]; cur=""
+    for word in words:
+        candidate=word if not cur else cur+" "+word
+        if pdf.get_string_width(candidate)<=width: cur=candidate
+        else:
+            lines.append(cur or word); cur=word
+            if len(lines)>=max_lines: break
+    if cur and len(lines)<max_lines: lines.append(cur)
+    if len(lines)==max_lines and len(" ".join(lines))<len(text):
+        last=lines[-1]
+        while last and pdf.get_string_width(last+"...")>width: last=last.rsplit(" ",1)[0] if " " in last else last[:-1]
+        lines[-1]=(last.rstrip(" .")+"...") if last else "..."
+    return lines
+
+def _pdf_table(pdf, dataframe, headers, widths, getter):
+    if dataframe is None or dataframe.empty: return
+    pdf.set_x(15)
+    pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
+    for h,w in zip(headers,widths): pdf.cell(w,8,_pdf_safe(h),border=1,fill=True)
+    pdf.ln()
+    for ridx,(_,row) in enumerate(dataframe.iterrows()):
+        vals=getter(row); line_sets=[_pdf_lines(pdf,v,w-3) for v,w in zip(vals,widths)]
+        h=max(8,max(len(x) for x in line_sets)*4.5+2)
+        if pdf.get_y()+h>270:
+            pdf.add_page(); pdf.set_x(15); pdf.set_y(20); pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
+            for hh,ww in zip(headers,widths): pdf.cell(ww,8,_pdf_safe(hh),border=1,fill=True)
+            pdf.ln()
+        x=15;y=pdf.get_y();pdf.set_fill_color(249,251,253) if ridx%2 else pdf.set_fill_color(255,255,255)
+        for lines,w,val in zip(line_sets,widths,vals):
+            pdf.rect(x,y,w,h,"DF"); pdf.set_xy(x+1.5,y+1.5)
+            
+            if "Risk" in val or "Blocked" in val: pdf.set_text_color(160, 55, 55)
+            elif "Completed" in val: pdf.set_text_color(22, 128, 91)
+            else: pdf.set_text_color(52, 64, 84)
+            
+            pdf.set_font("Arial","",8.2)
+            for line in lines:
+                pdf.cell(w-3,4.5,_pdf_safe(line),ln=True);pdf.set_x(x+1.5)
+            x+=w
+        pdf.set_y(y+h)
 
 def create_pdf_report(dataframe, header_title):
     if not FPDF_AVAILABLE: return None
-
-    accounts = list(dataframe["Account"].dropna().unique()) if "Account" in dataframe else []
-    teams = list(dataframe["Team"].dropna().unique()) if "Team" in dataframe else []
-    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
-    team_str = teams[0] if len(teams) == 1 else "Summary"
-    account_team_str = f"{acc_str} - {team_str}"
-    date_str = datetime.now(IST).strftime("%d %b %Y, %I:%M %p")
-
+    report=_build_report_model(dataframe,header_title);k=report["kpis"];o=report["outlook"]
+    
     class ReportPDF(FPDF):
         def header(self):
             if os.path.exists("logo.png"):
@@ -972,7 +779,7 @@ def create_pdf_report(dataframe, header_title):
             self.set_text_color(30, 41, 59)
             self.set_font("Arial", "B", 18)
             self.set_x(15)
-            self.cell(180, 8, safe_pdf_text(account_team_str), align="R", ln=True)
+            self.cell(180, 8, safe_pdf_text(report["account_team_str"]), align="R", ln=True)
             
             self.set_text_color(100, 116, 139)
             self.set_font("Arial", "", 8)
@@ -980,7 +787,7 @@ def create_pdf_report(dataframe, header_title):
             self.cell(180, 4, safe_pdf_text(header_title), align="R", ln=True)
             
             self.set_x(15)
-            self.cell(180, 4, safe_pdf_text(f"Generated: {date_str}"), align="R", ln=True)
+            self.cell(180, 4, safe_pdf_text(f"Generated: {report['generated'].strftime('%d %b %Y, %I:%M %p')}"), align="R", ln=True)
             
             self.set_y(32)
             self.set_draw_color(234, 88, 12)
@@ -997,148 +804,78 @@ def create_pdf_report(dataframe, header_title):
             self.set_text_color(30, 41, 59)
             self.set_font("Arial", "B", 8)
             self.set_xy(15, 285)
-            self.cell(90, 5, safe_pdf_text(f"Factspan \x95 {account_team_str}"), align="L")
+            self.cell(90, 5, safe_pdf_text(f"Factspan \x95 {report['account_team_str']}"), align="L")
             self.set_text_color(100, 116, 139)
             self.set_font("Arial", "", 8)
             self.set_xy(100, 285)
             self.cell(95, 5, f"Page {self.page_no()}", align="R")
 
-    pdf = ReportPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_margins(15, 15, 15)
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.add_page()
-
-    total_projects = len(dataframe)
-    total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
-    delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
-    avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
-    risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
-
-    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
-    box_w = 33; gap = 3.75; y = 42
-    for i, (label, value) in enumerate(kpis):
+    pdf=ReportPDF("P","mm","A4"); pdf.set_margins(15,15,15); pdf.set_auto_page_break(True,18); pdf.add_page()
+    
+    pdf.set_y(40)
+    cards=[("PROJECTS",k["projects"]),("RESOURCES",k["resources"]),("UPDATES",k["updates"]),("COMPLETION",f"{k['completion']}%"),("RISKS",k["risks"])]
+    box_w = 33.6; gap = 3; y = 40
+    for i,(lab,val) in enumerate(cards):
         x = 15 + i * (box_w + gap)
         pdf.set_fill_color(248, 250, 252); pdf.set_draw_color(226, 232, 240)
         pdf.rect(x, y, box_w, 24, "DF")
         pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "B", 6.8); pdf.set_xy(x, y + 4)
-        pdf.cell(box_w, 4, safe_pdf_text(label), align="C")
+        pdf.cell(box_w, 4, safe_pdf_text(lab), align="C")
         pdf.set_text_color(30, 41, 59); pdf.set_font("Arial", "B", 15); pdf.set_xy(x, y + 10)
-        pdf.cell(box_w, 8, safe_pdf_text(str(value)), align="C")
+        pdf.cell(box_w, 8, safe_pdf_text(str(val)), align="C")
     pdf.set_y(y + 32)
-
-    def section(title):
-        pdf.ln(5); y0 = pdf.get_y()
-        pdf.set_fill_color(37, 99, 235)
-        pdf.rect(15, y0 + 1, 2.5, 7, "F")
-        pdf.set_xy(19, y0); pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 13)
-        pdf.cell(170, 8, safe_pdf_text(title), ln=True); pdf.ln(1)
-
-    section("Executive Summary")
+    
+    _pdf_section(pdf, "Executive Summary")
     pdf.set_x(15)
     pdf.set_text_color(52, 64, 84); pdf.set_font("Arial", "", 9.5)
-    summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
-               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {resource_utilization(dataframe)}%. "
-               f"There are {risks} item(s) requiring risk or blocker attention.")
+    summary = (f"The selected report contains {k['projects']} project update(s) across {k['resources']} resource(s). "
+               f"{k['updates']} project(s) include a weekly delivery update. Average completion is {k['completion']}% and average utilization is {k['utilization']}%. "
+               f"There are {k['risks']} item(s) requiring risk or blocker attention.")
     pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
 
-    section("Project Status")
-    headers = [("Project", 60, "L"), ("Resource", 28, "L"), ("Status", 28, "L"), ("Comp.", 17, "C"), ("Util.", 17, "C"), ("Expected", 30, "L")]
-    pdf.set_fill_color(231, 238, 246); pdf.set_text_color(37, 54, 74); pdf.set_font("Arial", "B", 7.8)
-    pdf.set_x(15)
-    for label, width, al in headers: 
-        pdf.cell(width, 8, safe_pdf_text(label), border=1, fill=True, align=al)
-    pdf.ln(); pdf.set_font("Arial", "", 8.2)
-    for ridx, (_, row) in enumerate(dataframe.iterrows()):
+    _pdf_section(pdf, "Project Status")
+    _pdf_table(pdf, report["data"], ["Project", "Resource", "Status", "Comp.", "Util.", "Expected"], [60, 28, 28, 17, 17, 30], lambda r: [r.get("Project / Dashboard",""), r.get("Resource Name","") or r.get("Resource",""), r.get("Status",""), r.get("Completion %",""), r.get("Utilization %",""), r.get("Updated Expected Delivery date","")])
+    
+    _pdf_section(pdf, "Weekly Highlights")
+    for p,t in report["highlights"]:
         pdf.set_x(15)
-        if ridx % 2 == 1: pdf.set_fill_color(249, 251, 253)
-        else: pdf.set_fill_color(255, 255, 255)
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A"))[:40]
-        
-        # Elegant Name extraction for PDF table
-        raw_name = str(row.get("Resource Name", "")).strip()
-        if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
-            resource = safe_pdf_text(raw_name)[:20]
-        else:
-            email_val = str(row.get("Resource", "N/A")).strip()
-            resource = safe_pdf_text(email_val.split('@')[0].replace('.', ' ').title())[:20]
-            
-        status = safe_pdf_text(row.get("Status", "N/A"))[:15]; comp = safe_pdf_text(row.get("Completion %", "N/A"))
-        util = safe_pdf_text(row.get("Utilization %", "N/A")); expected = safe_pdf_text(row.get("Updated Expected Delivery date", "N/A"))
-        
-        pdf.set_text_color(52, 64, 84)
-        pdf.cell(60, 8, project, border=1, fill=True, align="L")
-        pdf.cell(28, 8, resource, border=1, fill=True, align="L")
-        
-        if status in ("At Risk", "Blocked"): pdf.set_text_color(160, 55, 55)
-        elif status == "Completed": pdf.set_text_color(22, 128, 91)
-        pdf.cell(28, 8, status, border=1, fill=True, align="L"); pdf.set_text_color(52, 64, 84)
-        
-        pdf.cell(17, 8, comp, border=1, fill=True, align="C")
-        pdf.cell(17, 8, util, border=1, fill=True, align="C")
-        pdf.cell(30, 8, expected, border=1, fill=True, align="L")
-        pdf.ln()
+        pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, _pdf_safe(p))
+        pdf.set_x(15)
+        pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, _pdf_safe(f"Delivered: {t}")); pdf.ln(1.5)
+    if not report["highlights"]: 
+        pdf.set_x(15)
+        pdf.set_text_color(100, 116, 139); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, "No weekly accomplishment updates reported.")
 
-    section("Weekly Highlights")
-    for _, row in dataframe.iterrows():
+    _pdf_section(pdf, "Risks & Blockers")
+    if report["risks_df"].empty:
         pdf.set_x(15)
-        project = safe_pdf_text(row.get("Project / Dashboard", "N/A")); delivered_text = safe_pdf_text(row.get("This Week Delivered", "None reported."))
-        pdf.set_text_color(22, 50, 79); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, project)
-        pdf.set_x(15)
-        pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9); pdf.multi_cell(180, 5, f"Delivered: {delivered_text or 'None reported.'}"); pdf.ln(1.5)
-
-    risk_df = dataframe[(dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")]
-    section("Risks & Blockers")
-    if risk_df.empty:
-        pdf.set_x(15)
-        pdf.set_text_color(22, 128, 91); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 6, safe_pdf_text("No active blockers or risks reported for this period."))
+        pdf.set_text_color(22, 128, 91); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 6, "No active blockers or risks reported for this period.")
     else:
-        for _, row in risk_df.iterrows():
+        for _, row in report["risks_df"].iterrows():
             pdf.set_x(15)
-            pdf.set_text_color(194, 65, 61); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, safe_pdf_text(row.get("Project / Dashboard", "N/A")))
+            pdf.set_text_color(194, 65, 61); pdf.set_font("Arial", "B", 9); pdf.multi_cell(180, 5, _pdf_safe(row.get("Project / Dashboard", "N/A")))
             pdf.set_x(15)
             pdf.set_text_color(71, 84, 103); pdf.set_font("Arial", "", 9)
             blocker = row.get("Blocker", "") or f"Status marked as: {row.get('Status', 'N/A')}"
-            pdf.multi_cell(180, 5, safe_pdf_text(blocker)); pdf.ln(1.5)
-
-    pdf.add_page()
-    section("Management Actions & Health")
-    pdf.set_text_color(52,64,84); pdf.set_font("Arial", "", 9)
-    for _, row in dataframe.iterrows():
-        hs=health_score(row); priority,_=classify_attention(row)
-        if priority != "Normal" or hs < 80:
-            pdf.set_x(15)
-            text=f"{safe_pdf_text(row.get('Project / Dashboard','N/A'))} | Health {hs}/100 | {priority} | Action: {safe_pdf_text(suggested_action(row))}"
-            pdf.multi_cell(180,5,text); pdf.ln(1)
-            
-    section("Delivery Outlook")
-    pdf.set_font("Arial", "", 9)
-    counts=Counter(delivery_bucket(r) for _,r in dataframe.iterrows())
-    pdf.set_x(15)
-    pdf.multi_cell(180,5,safe_pdf_text("Overdue: %s | Next 7 Days: %s | 8–14 Days: %s | 15+ Days: %s | Delivered: %s" % (counts.get("Overdue",0),counts.get("Next 7 Days",0),counts.get("8–14 Days",0),counts.get("15+ Days",0),counts.get("Delivered",0))))
+            pdf.multi_cell(180, 5, _pdf_safe(blocker)); pdf.ln(1.5)
 
     try: 
-        output = pdf.output(dest="S"); return output.encode("latin-1") if isinstance(output, str) else bytes(output)
+        out = pdf.output(dest="S"); return out.encode("latin-1") if isinstance(out, str) else bytes(out)
     except Exception: return bytes(pdf.output())
 
+# =========================================================
+# EXCEL REPORT GENERATOR
+# =========================================================
 def create_excel_report(dataframe, report_title):
-    buffer = io.BytesIO()
-    wb = Workbook() if OPENPYXL_AVAILABLE else None
-    if wb is None:
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: dataframe.to_excel(writer, index=False, sheet_name="Weekly Notes")
-        return buffer.getvalue()
-
-    accounts = list(dataframe["Account"].dropna().unique()) if "Account" in dataframe else []
-    teams = list(dataframe["Team"].dropna().unique()) if "Team" in dataframe else []
-    acc_str = accounts[0] if len(accounts) == 1 else "Portfolio"
-    team_str = teams[0] if len(teams) == 1 else "Summary"
-    account_team_str = f"{acc_str} - {team_str}"
-    date_str = report_title.split(": ")[-1] if ": " in report_title else report_title
-
+    if not OPENPYXL_AVAILABLE:
+        buffer=io.BytesIO();dataframe.to_excel(buffer,index=False);return buffer.getvalue()
+    report=_build_report_model(dataframe,report_title);k=report["kpis"];wb=Workbook();buffer=io.BytesIO()
+    
     ws = wb.active; ws.title = "Weekly Notes"
     cols = ["Resource", "Business Owner", "Project / Dashboard", "Start date", "Initial Delivery date", "Updated Expected Delivery date", "Work Type", "This Week Delivered", "Next Week Priority", "Completion %", "Utilization %", "Status", "Blocker"]
     
-    ws["A1"] = date_str; ws["A1"].fill = PatternFill("solid", fgColor="FFD966"); ws["A1"].font = Font(bold=True, color="000000"); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    ws["B1"] = f"{account_team_str} ({date_str})"; ws["B1"].fill = PatternFill("solid", fgColor="004B87"); ws["B1"].font = Font(bold=True, color="FFFFFF"); ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws["A1"] = report["title"]; ws["A1"].fill = PatternFill("solid", fgColor="FFD966"); ws["A1"].font = Font(bold=True, color="000000"); ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws["B1"] = f"{report['account_team_str']} ({report['generated'].strftime('%d %b %Y')})"; ws["B1"].fill = PatternFill("solid", fgColor="004B87"); ws["B1"].font = Font(bold=True, color="FFFFFF"); ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=len(cols)); ws.row_dimensions[1].height = 25
     
     header_fill = PatternFill("solid", fgColor="DDEBF7"); header_font = Font(bold=True, color="000000"); thin_border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
@@ -1147,7 +884,7 @@ def create_excel_report(dataframe, report_title):
     ws.row_dimensions[2].height = 35
     
     resource_fill = PatternFill("solid", fgColor="FCE4D6"); owner_fill = PatternFill("solid", fgColor="E2EFDA")
-    for r_idx, row in enumerate(dataframe.to_dict('records'), 3):
+    for r_idx, row in enumerate(report["data"].to_dict('records'), 3):
         for c_idx, col_name in enumerate(cols, 1):
             val = row.get(col_name, ""); cell = ws.cell(row=r_idx, column=c_idx, value=val); cell.border = thin_border; cell.alignment = Alignment(vertical="top", wrap_text=True)
             if col_name == "Resource": cell.fill = resource_fill; cell.font = Font(bold=True, color="004B87")
@@ -1155,44 +892,48 @@ def create_excel_report(dataframe, report_title):
             elif col_name == "Status": cell.font = Font(bold=True)
     widths = {"A": 16, "B": 14, "C": 30, "D": 11, "E": 11, "F": 13, "G": 22, "H": 38, "I": 35, "J": 12, "K": 12, "L": 14, "M": 38}
     for col_letter, width in widths.items(): ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A3"; ws.auto_filter.ref = f"A2:M{max(2,len(dataframe)+2)}"
+    ws.freeze_panes = "A3"; ws.auto_filter.ref = f"A2:M{max(2,len(report['data'])+2)}"
 
     ex = wb.create_sheet("Executive Summary")
-    score, counts = portfolio_health(dataframe)
-    avg_completion = int(round(sum(pct_value(x) for x in dataframe["Completion %"])/max(1,len(dataframe)))) if not dataframe.empty else 0
-    metrics=[("Report Period",current_period_label(dataframe)),("Projects",len(dataframe)),("Resources",dataframe["Resource"].nunique() if not dataframe.empty else 0),("Avg Completion",f"{avg_completion}%"),("Avg Utilization",f"{resource_utilization(dataframe)}%"),("Portfolio Health",f"{score}/100"),("Healthy",counts.get("Healthy",0)),("Attention",counts.get("Attention",0)),("Critical",counts.get("Critical",0))]
+    metrics=[("Report Period",report["period"]),("Projects",k["projects"]),("Resources",k["resources"]),("Avg Completion",f"{k['completion']}%"),("Avg Utilization",f"{k['utilization']}%"),("Portfolio Health",f"{k['health']}/100"),("Healthy",sum(1 for _,r in report["data"].iterrows() if health_score(r)>=80)),("Attention",sum(1 for _,r in report["data"].iterrows() if 60<=health_score(r)<80)),("Critical",sum(1 for _,r in report["data"].iterrows() if health_score(r)<60))]
     ex.append(["Executive Summary",""]); ex.merge_cells("A1:B1"); ex["A1"].font=Font(size=16,bold=True,color="FFFFFF"); ex["A1"].fill=PatternFill("solid",fgColor="004B87")
-    for k,v in metrics: ex.append([k,v])
+    for kk,vv in metrics: ex.append([kk,vv])
     for cell in ex["A"]: cell.font=Font(bold=True)
     ex.column_dimensions["A"].width=25; ex.column_dimensions["B"].width=35; ex.freeze_panes="A2"
 
     ra = wb.create_sheet("Risks & Actions")
-    action_items=build_action_items(dataframe); ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
-    for item in action_items: ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
+    ra.append(["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"])
+    for item in report["actions"]: ra.append([item.get(k,"") for k in ["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]])
 
     wow = wb.create_sheet("Week-over-Week")
-    yrs=list(dataframe["Year"].unique()) if not dataframe.empty else []; mos=list(dataframe["Month"].unique()) if not dataframe.empty else []; wks=list(dataframe["Week"].unique()) if not dataframe.empty else []
-    mv=compare_current_to_prior(dataframe,get_latest_prior_week(dataframe,yrs[0],mos[0],wks[0])) if len(yrs)==len(mos)==len(wks)==1 else pd.DataFrame()
-    if mv.empty: wow.append(["Select exactly one Year, Month and Week in the app to populate week-over-week movement."])
-    else:
-        wow.append(list(mv.columns)); [wow.append(list(r)) for r in mv.itertuples(index=False,name=None)]
+    if report["movement"].empty: wow.append(["Select exactly one Year, Month and Week in the app to populate week-over-week movement."])
+    else: wow.append(list(report["movement"].columns)); [wow.append(list(r)) for r in report["movement"].itertuples(index=False,name=None)]
 
     dq=wb.create_sheet("Data Quality")
     dq.append(["Project / Dashboard","Resource","Status","Issues"])
-    for _,r in dataframe.iterrows():
+    for _,r in report["data"].iterrows():
         flags=data_quality_flags(r)
         if flags: dq.append([r.get("Project / Dashboard",""),r.get("Resource",""),r.get("Status",""),"; ".join(flags)])
 
     for sh in [ex,ra,wow,dq]:
-        for cell in sh[1]: cell.font=Font(bold=True, color="000000"); cell.fill=PatternFill("solid",fgColor="DDEBF7"); cell.alignment=Alignment(wrap_text=True)
+        for cell in sh[1]: cell.font=Font(bold=True, color="FFFFFF"); cell.fill=PatternFill("solid",fgColor="004B87"); cell.alignment=Alignment(wrap_text=True)
         for col in range(1, sh.max_column+1): sh.column_dimensions[get_column_letter(col)].width=min(45,max(14,sh.column_dimensions[get_column_letter(col)].width or 14))
         sh.freeze_panes="A2"
     wb.save(buffer); return buffer.getvalue()
 
-def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, dataframe=None):
-    recipients = [x.strip() for x in recipients if x.strip()]; cc_recipients = [x.strip() for x in (cc_recipients or []) if x.strip()]
-    if not recipients: return False, "Please enter at least one recipient email address."
-    cfg = st.secrets if hasattr(st, "secrets") else {}; host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", "")); port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587"))); username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", "")); password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", "")); sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username)); use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, excel_bytes=None, html_body=None):
+    recipients, invalid_to = _validated_emails([x.strip() for x in recipients if x.strip()])
+    cc_recipients, invalid_cc = _validated_emails([x.strip() for x in (cc_recipients or []) if x.strip()])
+    if not recipients: return False, "Please enter at least one valid recipient email address."
+    
+    cfg = st.secrets if hasattr(st, "secrets") else {}
+    host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
+    port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
+    username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", ""))
+    password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
+    sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
+    use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+    
     if not host or not sender: return False, "Email sending is not configured (SMTP secrets missing)."
     
     msg = EmailMessage()
@@ -1201,21 +942,22 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, d
     msg["To"] = ", ".join(recipients)
     if cc_recipients: msg["Cc"] = ", ".join(cc_recipients)
     
-    if dataframe is not None and not dataframe.empty:
-        html_content = generate_html_email_body(dataframe, report_title)
+    if html_body:
         msg.set_content(f"Please find attached the {report_title}. To view the rich report, please enable HTML in your email client.")
-        msg.add_alternative(html_content, subtype='html')
+        msg.add_alternative(html_body, subtype='html')
         
-        if os.path.exists("logo.png"):
+        if os.path.exists("logo.png") and "cid:factspan_logo" in html_body:
             try:
                 with open("logo.png", "rb") as img:
-                    msg.get_payload()[1].add_related(img.read(), maintype='image', subtype='png', cid='<logo_img>')
+                    msg.get_payload()[1].add_related(img.read(), maintype='image', subtype='png', cid='<factspan_logo>')
             except Exception: pass
     else:
         msg.set_content(f"""Hello,\n\nPlease find attached the {report_title}.\n\nThe report includes the executive portfolio view, delivery outlook, risks/actions, health signals and data-quality checks.\n\nGenerated by: {st.session_state.get('current_name','')} ({st.session_state.get('current_email','')})\nGenerated at: {datetime.now(IST).strftime('%d %b %Y, %I:%M %p')}\n\nRegards,\nWeekly Project Report""")
         
     if pdf_bytes:
         msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="Weekly_Project_Report.pdf")
+    if excel_bytes:
+        msg.add_attachment(excel_bytes, maintype="application", subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="Weekly_Project_Report.xlsx")
         
     try:
         with smtplib.SMTP(host, port, timeout=20) as server:
@@ -1225,13 +967,19 @@ def send_report_email(pdf_bytes, report_title, recipients, cc_recipients=None, d
         return True, f"Report sent successfully to {', '.join(recipients)}."
     except Exception as exc: return False, f"Unable to send report: {exc}"
 
+def _validated_emails(values):
+    valid=[];invalid=[]
+    for raw in values:
+        addr=getaddresses([raw])[0][1].strip().lower()
+        if addr and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+",addr):valid.append(addr)
+        elif raw.strip():invalid.append(raw.strip())
+    return list(dict.fromkeys(valid)),list(dict.fromkeys(invalid))
+
 # =========================================================
 # DATA + GLOBAL TOP AREA
 # =========================================================
 df = pd.DataFrame(st.session_state.notes_db)
 filtered_df = pd.DataFrame()
-reporting_week = "All Weeks"
-reporting_month = "All Months"
 
 st.markdown(f"""
 <div class="app-hero">
@@ -1432,10 +1180,14 @@ if st.session_state.get("show_send_dialog"):
             if st.button("✉️ Send Now", type="primary", use_container_width=True, key="send_now"):
                 to_list = [x.strip() for x in to_value.replace(";", ",").split(",") if x.strip()]
                 cc_list = [x.strip() for x in cc_value.replace(";", ",").split(",") if x.strip()]
-                current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
+                with st.spinner("Generating leadership email, PDF and Excel report..."):
+                    report_model = _build_report_model(filtered_df, subject_value)
+                    current_pdf = create_pdf_report(filtered_df, subject_value) if FPDF_AVAILABLE else None
+                    current_excel = create_excel_report(filtered_df, subject_value)
+                    current_html = generate_html_report(report_model)
                 if current_pdf is None: st.error("PDF generation unavailable.")
                 else:
-                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, dataframe=filtered_df)
+                    ok, message = send_report_email(current_pdf, subject_value, to_list, cc_list, current_excel, current_html)
                     if ok: st.success(message); st.session_state["show_send_dialog"] = None
                     else: st.error(message)
         with b2:
@@ -1627,12 +1379,10 @@ elif nav_selection == "📋 Weekly Summary":
     else:
         total_projects = len(filtered_df)
         total_resources = filtered_df["Resource"].nunique()
-        delivered_count = len(filtered_df[filtered_df["This Week Delivered"].fillna("").str.strip() != ""])
+        delivered_count = len(filtered_df[filtered_df["This Week Delivered"].fillna("").astype(str).str.strip() != ""])
         avg_comp = int((filtered_df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100)).mean()) if not filtered_df.empty else 0
-        
         avg_util = resource_utilization(filtered_df) if not filtered_df.empty else 0
-        
-        risk_items = filtered_df[(filtered_df["Status"].isin(["At Risk", "Blocked"])) | (filtered_df["Blocker"].fillna("").str.strip() != "")]
+        risk_items = filtered_df[(filtered_df["Status"].isin(["At Risk", "Blocked"])) | (filtered_df["Blocker"].fillna("").astype(str).str.strip() != "")]
         risk_count = len(risk_items)
 
         st.markdown('<div class="section-header">Executive Summary</div>', unsafe_allow_html=True)
@@ -1738,12 +1488,9 @@ elif nav_selection == "📈 Executive Report":
         st.markdown('<div class="section-header">Portfolio Management View</div>', unsafe_allow_html=True)
         hscore, hcounts = portfolio_health(filtered_df)
         ec1, ec2, ec3, ec4 = st.columns([2, 2, 2, 4])
-        with ec1:
-            st.caption(f"{len(filtered_df)} project update(s) in current selection")
-        with ec2:
-            st.caption(f"{sum(1 for _, r in filtered_df.iterrows() if classify_attention(r)[0] == 'Critical')} critical item(s)")
-        with ec3:
-            st.caption(f"Portfolio health: {hscore}/100")
+        with ec1: st.caption(f"{len(filtered_df)} project update(s) in current selection")
+        with ec2: st.caption(f"{sum(1 for _, r in filtered_df.iterrows() if classify_attention(r)[0] == 'Critical')} critical item(s)")
+        with ec3: st.caption(f"Portfolio health: {hscore}/100")
         with ec4:
             compact_mode = st.toggle("Compact executive view", value=st.session_state.get("executive_compact", False), key="executive_compact_toggle", help="Switch between the detailed project cards and a dense management table.")
             st.session_state.executive_compact = compact_mode
@@ -1754,13 +1501,13 @@ elif nav_selection == "📈 Executive Report":
                 compact_rows.append({"Account":r.get("Account",""),"Team":r.get("Team",""),"Project":r.get("Project / Dashboard",""),"Owner":r.get("Business Owner",""),"Status":r.get("Status",""),"Completion":r.get("Completion %",""),"Delivery":delivery_state(r),"Health":f"{hs}/100 · {health_label(hs)}","Risk":suggested_action(r) if classify_attention(r)[0] != "Normal" else "—"})
             st.dataframe(pd.DataFrame(compact_rows), use_container_width=True, hide_index=True)
         else:
-          for account_name in filtered_df["Account"].unique():
+          for account_name in filtered_df["Account"].dropna().unique():
             st.markdown(f"<div class='acc-header'>🏢 {account_name}</div>", unsafe_allow_html=True)
             account_data = filtered_df[filtered_df["Account"] == account_name]
-            for team_name in account_data["Team"].unique():
+            for team_name in account_data["Team"].dropna().unique():
                 st.markdown(f"<div class='team-header'>{team_name}</div>", unsafe_allow_html=True)
                 team_data = account_data[account_data["Team"] == team_name]
-                for resource_name in team_data["Resource"].unique():
+                for resource_name in team_data["Resource"].dropna().unique():
                     resource_data = team_data[team_data["Resource"] == resource_name]
                     with st.expander(f"👤 {resource_name} ({len(resource_data)} updates)", expanded=True):
                         for index, row in resource_data.iterrows():
@@ -1787,11 +1534,11 @@ elif nav_selection == "📈 Executive Report":
                                     curr_status = row.get('Status', 'On Track')
                                     if curr_status not in status_opts: curr_status = "On Track"
                                     e_status = e_r3c1.selectbox("Status", status_opts, index=status_opts.index(curr_status), key=f"estat_{rec_id}")
-                                    e_comp = e_r3c2.number_input("Completion %", min_value=0, max_value=100, step=5, value=int(str(row.get('Completion %', '0')).replace('%','')), key=f"ecomp_{rec_id}")
-                                    e_util = e_r3c3.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(str(row.get('Utilization %', '0')).replace('%','')), key=f"eutil_{rec_id}")
-                                    e_tw = st.text_area("This Week Delivered", value=row.get('This Week Delivered', ''), height=85, key=f"etw_{rec_id}")
-                                    e_nw = st.text_area("Next Week Priority", value=row.get('Next Week Priority', ''), height=85, key=f"enw_{rec_id}")
-                                    e_block = st.text_area("Blocker / Risks", value=row.get('Blocker', ''), height=68, key=f"eb_{rec_id}")
+                                    e_comp = e_r3c2.number_input("Completion %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Completion %', '0'))), key=f"ecomp_{rec_id}")
+                                    e_util = e_r3c3.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Utilization %', '0'))), key=f"eutil_{rec_id}")
+                                    e_tw = st.text_area("This Week Delivered", value=str(row.get('This Week Delivered', '')), height=85, key=f"etw_{rec_id}")
+                                    e_nw = st.text_area("Next Week Priority", value=str(row.get('Next Week Priority', '')), height=85, key=f"enw_{rec_id}")
+                                    e_block = st.text_area("Blocker / Risks", value=str(row.get('Blocker', '')), height=68, key=f"eb_{rec_id}")
                                     st.divider()
                                     e_btn_c1, e_btn_c2, _ = st.columns([2, 2, 6])
                                     with e_btn_c1:
@@ -1826,49 +1573,27 @@ elif nav_selection == "📈 Executive Report":
                                         st.markdown(f"<div class='card-title'> {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
                                         st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {html_escape(row.get('Business Owner',''))} &nbsp;|&nbsp; <b>Type:</b> {html_escape(row.get('Work Type',''))}</span>", unsafe_allow_html=True)
                                     with h_col2:
-                                        can_edit = False
-                                        curr_role = st.session_state.get("current_role", "")
-                                        curr_email = st.session_state.get("current_email", "").strip().lower()
-                                        curr_scope = [s.strip().lower() for s in st.session_state.get("current_scope", "").split(",") if s.strip()]
-                                        curr_acc_scope = [s.strip().lower() for s in st.session_state.get("current_acc_scope", "").split(",") if s.strip()]
-                                        
-                                        row_team = str(row.get("Team", "")).strip().lower()
-                                        row_acc = str(row.get("Account", "")).strip().lower()
-                                        row_email = str(row.get("Resource", "")).strip().lower()
-                                        
-                                        if curr_role == "Admin":
-                                            can_edit = True
-                                        elif curr_role == "Account Manager" and row_acc in curr_scope:
-                                            can_edit = True
-                                        elif curr_role == "Team Lead" and row_team in curr_scope and row_acc in curr_acc_scope:
-                                            can_edit = True
-                                        elif row_email == curr_email:
-                                            can_edit = True
-                                            
-                                        if can_edit:
+                                        if user_can_edit_row(row):
                                             if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
-                                                if user_can_edit_row(row):
-                                                    st.session_state.edit_id = rec_id; st.rerun()
-                                                else:
-                                                    st.error("You are not authorized to edit this record.")
+                                                st.session_state.edit_id = rec_id; st.rerun()
                                         else:
                                             st.markdown("<div style='color:#94a3b8; font-size:12px; text-align:center; padding-top:10px;'>🔒 View Only</div>", unsafe_allow_html=True)
 
                                     c1, c2, c3 = st.columns([2, 2, 1])
                                     with c1:
                                         st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>THIS WEEK DELIVERED</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('This Week Delivered','')) if row.get('This Week Delivered') else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Start: <b>{row['Start date']}</b></div>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('This Week Delivered','')) if str(row.get('This Week Delivered','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Start: <b>{html_escape(row.get('Start date',''))}</b></div>", unsafe_allow_html=True)
                                     with c2:
                                         st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>NEXT WEEK PRIORITY</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('Next Week Priority','')) if row.get('Next Week Priority') else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Expected Delivery: <b>{row['Updated Expected Delivery date']}</b></div>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('Next Week Priority','')) if str(row.get('Next Week Priority','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Expected Delivery: <b>{html_escape(row.get('Updated Expected Delivery date',''))}</b></div>", unsafe_allow_html=True)
                                     with c3:
                                         st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>METRICS</div>", unsafe_allow_html=True)
-                                        st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between;'><span>Completion</span><b>{row['Completion %']}</b></div>", unsafe_allow_html=True)
-                                        st.progress(get_pct_decimal(row['Completion %']))
-                                        st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{row['Utilization %']}</b></div>", unsafe_allow_html=True)
-                                        st.progress(get_pct_decimal(row['Utilization %']))
+                                        st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between;'><span>Completion</span><b>{html_escape(row.get('Completion %',''))}</b></div>", unsafe_allow_html=True)
+                                        st.progress(get_pct_decimal(row.get('Completion %','')))
+                                        st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{html_escape(row.get('Utilization %',''))}</b></div>", unsafe_allow_html=True)
+                                        st.progress(get_pct_decimal(row.get('Utilization %','')))
                                     
                                     d_state = delivery_state(row)
                                     d_flags = data_quality_flags(row)
@@ -1879,8 +1604,8 @@ elif nav_selection == "📈 Executive Report":
                                     if d_flags:
                                         st.markdown(f"<div class='edit-banner' style='margin-top:10px'>🧹 <b>Data quality:</b> {html_escape('; '.join(d_flags))}</div>", unsafe_allow_html=True)
 
-                                    if row["Blocker"] and str(row["Blocker"]).strip().lower() not in ["none", "na", "n/a", ""]:
-                                        st.markdown(f"<div class='alert-card alert-danger' style='margin-top:14px; margin-bottom:0;'><div class='alert-title'>⚠ Blocker</div><div class='alert-desc'>{html_escape(row.get('Blocker',''))}</div></div>", unsafe_allow_html=True)
+                                    if str(row.get("Blocker","")).strip().lower() not in ["none", "na", "n/a", ""]:
+                                        st.markdown(f"<div class='alert-card alert-danger' style='margin-top:14px; margin-bottom:0; background:#fef2f2; border-left:4px solid #dc2626; padding:10px;'><div class='alert-title' style='font-weight:bold; color:#b91c1c;'>⚠ Blocker</div><div class='alert-desc' style='font-size:13px; color:#450a0a;'>{html_escape(row.get('Blocker',''))}</div></div>", unsafe_allow_html=True)
 
 # =========================================================
 # VIEW 4: ACTION CENTER

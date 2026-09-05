@@ -124,6 +124,7 @@ if not st.session_state.authenticated:
     
     tab1, tab2, tab3 = st.tabs(["🔐 Log In", "📝 Create Account", "🔑 Forgot Password"])
     
+    # --- TAB 1: LOG IN ---
     with tab1:
         log_email = st.text_input("Company Email", key="log_email", placeholder="name@company.com").strip().lower()
         log_pwd = st.text_input("Password", type="password", key="log_pwd", placeholder="Your personal password")
@@ -155,6 +156,7 @@ if not st.session_state.authenticated:
                     else:
                         st.error("Invalid email or password.")
                         
+    # --- TAB 2: CREATE ACCOUNT (WITH OTP VERIFICATION) ---
     with tab2:
         if not st.session_state.reg_otp:
             reg_name = st.text_input("Full Name", key="reg_name", placeholder="e.g. John Smith").strip()
@@ -201,9 +203,13 @@ if not st.session_state.authenticated:
                     else:
                         password_keys = {"Team Lead": "LEAD_PASSWORD", "Account Manager": "ACCOUNT_PASSWORD", "Admin": "ADMIN_PASSWORD"}
                         req_invite = st.secrets.get(password_keys[reg_role], os.getenv(password_keys[reg_role], ""))
-                        if not req_invite: st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
-                        elif reg_invite != req_invite: st.error(f"Invalid Invite Code for the {reg_role} role.")
-                        else: invite_valid = True
+                        
+                        if not req_invite:
+                            st.error(f"Configuration error: {password_keys[reg_role]} is not set in secrets.")
+                        elif reg_invite != req_invite:
+                            st.error(f"Invalid Invite Code for the {reg_role} role.")
+                        else:
+                            invite_valid = True
                     
                     if invite_valid:
                         with st.spinner("Checking details..."):
@@ -243,7 +249,8 @@ if not st.session_state.authenticated:
                         with st.spinner("Creating your account securely..."):
                             client = get_gspread_client()
                             spreadsheet = client.open("Weekly Notes Database")
-                            try: u_sheet = spreadsheet.worksheet("Users")
+                            try:
+                                u_sheet = spreadsheet.worksheet("Users")
                             except Exception:
                                 u_sheet = spreadsheet.add_worksheet(title="Users", rows=1000, cols=6)
                                 u_sheet.append_row(["Email", "Name", "Role", "Scope", "Account_Scope", "Password_Hash"])
@@ -264,6 +271,7 @@ if not st.session_state.authenticated:
                             st.session_state.current_role = st.session_state.reg_details['role']
                             st.session_state.current_scope = st.session_state.reg_details['scope']
                             st.session_state.current_acc_scope = st.session_state.reg_details['acc_scope']
+                            
                             st.session_state.reg_otp = None
                             st.session_state.reg_details = None
                             st.rerun()
@@ -273,6 +281,7 @@ if not st.session_state.authenticated:
                     st.session_state.reg_details = None
                     st.rerun()
 
+    # --- TAB 3: FORGOT PASSWORD ---
     with tab3:
         if not st.session_state.reset_otp:
             st.markdown("<p style='font-size:14px; color:#475569;'>Enter your registered email address to receive a secure 6-digit reset code.</p>", unsafe_allow_html=True)
@@ -781,7 +790,7 @@ def generate_html_email_body(df, report_title):
         proj = html_escape(row.get("Project / Dashboard", ""))
         owner = html_escape(row.get("Business Owner", ""))
         
-        # Name Extraction to prevent email spillover
+        # Elegant Name Extraction for Email HTML to prevent squishing
         raw_name = str(row.get("Resource Name", "")).strip()
         if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
             res = html_escape(raw_name)
@@ -796,18 +805,18 @@ def generate_html_email_body(df, report_title):
 
         table_rows += f"""
         <tr>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
+            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
                 <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
             </td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{res}</td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
-                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 6px;">{comp}% Completed</div>
+            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{res}</td>
+            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
+                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}% Completed</div>
                 <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
                     <div style="background-color: {status_color}; width: {comp}%; height: 100%;"></div>
                 </div>
             </td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
+            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
+            <td style="padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
         </tr>
         """
 
@@ -828,18 +837,34 @@ def generate_html_email_body(df, report_title):
             
     logo_src = "cid:logo_img" if os.path.exists("logo.png") else EMAIL_LOGO_URL
 
+    # Using robust Mobile CSS for Phone Compatability
     html_body = f"""
     <!DOCTYPE html>
     <html>
-    <head><meta charset="utf-8"></head>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            @media only screen and (max-width: 600px) {{
+                .email-container {{ width: 100% !important; padding: 0 !important; }}
+                .mobile-stack {{ display: block !important; width: 100% !important; padding: 10px 0 !important; text-align: center !important; }}
+                .mobile-hide {{ display: none !important; }}
+                .kpi-box {{ display: block !important; width: 100% !important; margin-bottom: 10px !important; box-sizing: border-box; }}
+                .logo-img {{ margin: 0 auto !important; }}
+                .table-scroll {{ overflow-x: auto !important; display: block !important; width: 100% !important; }}
+                .responsive-table {{ min-width: 600px !important; }}
+                .footer-text {{ text-align: center !important; padding: 5px 0 !important; display: block !important; width: 100% !important; }}
+            }}
+        </style>
+    </head>
     <body style="margin: 0; padding: 20px; background-color: #f4f7fb;">
-        <div style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
+        <div class="email-container" style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
                 <tr>
-                    <td width="40%" valign="middle">
-                        <img src="{logo_src}" alt="FACTSPAN" width="200" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
+                    <td class="mobile-stack" width="40%" valign="middle" align="left">
+                        <img src="{logo_src}" alt="FACTSPAN" width="200" class="logo-img" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; font-family: Arial, sans-serif;" />
                     </td>
-                    <td width="60%" align="right" valign="middle">
+                    <td class="mobile-stack" width="60%" align="right" valign="middle">
                         <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
                         <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
                         <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
@@ -856,42 +881,45 @@ def generate_html_email_body(df, report_title):
                 
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 25px;">
                     <tr>
-                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
                             <div style="font-size: 28px; font-weight: bold; color: #1e293b; font-family: Arial, sans-serif;">{total_projects}</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
                         </td>
-                        <td width="2%"></td>
-                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
+                        <td class="mobile-hide" width="2%"></td>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
                             <div style="font-size: 28px; font-weight: bold; color: #16a34a; font-family: Arial, sans-serif;">{delivered}</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">UPDATES</div>
                         </td>
-                        <td width="2%"></td>
-                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fffbeb;">
+                        <td class="mobile-hide" width="2%"></td>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fffbeb;">
                             <div style="font-size: 28px; font-weight: bold; color: #ea580c; font-family: Arial, sans-serif;">{avg_comp}%</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">COMPLETION</div>
                         </td>
-                        <td width="2%"></td>
-                        <td width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fef2f2;">
+                        <td class="mobile-hide" width="2%"></td>
+                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fef2f2;">
                             <div style="font-size: 28px; font-weight: bold; color: #dc2626; font-family: Arial, sans-serif;">{risks}</div>
                             <div style="font-size: 10px; color: #64748b; font-family: Arial, sans-serif; text-transform: uppercase; margin-top: 4px;">RISKS</div>
                         </td>
                     </tr>
                 </table>
                 
-                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px; table-layout: fixed;">
-                    <thead>
-                        <tr style="background-color: #1e293b;">
-                            <th align="left" width="28%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">PROJECT / OWNER</th>
-                            <th align="left" width="20%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">RESOURCE</th>
-                            <th align="left" width="25%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">DELIVERY PROGRESS</th>
-                            <th align="left" width="15%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">TARGET DATE</th>
-                            <th align="left" width="12%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">STATUS</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {table_rows}
-                    </tbody>
-                </table>
+                <div class="table-scroll">
+                    <table class="responsive-table" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px;">
+                        <thead>
+                            <tr style="background-color: #1e293b;">
+                                <th align="left" width="30%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">PROJECT / OWNER</th>
+                                <th align="left" width="20%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">RESOURCE</th>
+                                <th align="left" width="25%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">DELIVERY PROGRESS</th>
+                                <th align="left" width="15%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">TARGET DATE</th>
+                                <th align="left" width="10%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">STATUS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {table_rows}
+                        </tbody>
+                    </table>
+                </div>
+                
                 <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px; margin-bottom: 30px;">
                     <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
                     <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.6;">
@@ -901,10 +929,10 @@ def generate_html_email_body(df, report_title):
             </div>
             <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #1e293b; padding: 15px 25px;">
                 <tr>
-                    <td align="left" style="color: #f1f5f9; font-size: 11px;">
+                    <td class="footer-text" align="left" style="color: #f1f5f9; font-size: 11px;">
                         Factspan &bull; {account_team_str}
                     </td>
-                    <td align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">
+                    <td class="footer-text" align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">
                         Staying Relevant and Ahead through Fluid Intelligence
                     </td>
                 </tr>

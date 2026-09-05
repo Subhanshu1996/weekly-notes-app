@@ -190,8 +190,7 @@ if not st.session_state.authenticated:
             reg_email = st.text_input("Company Email", key="reg_email", placeholder="name@company.com").strip().lower()
             reg_role = st.selectbox("Select Your Role", ["Team Member", "Team Lead", "Account Manager", "Admin"], key="reg_role")
             
-            reg_acc_scope = ""
-            reg_scope = ""
+            reg_acc_scope, reg_scope = "", ""
             if reg_role == "Team Lead":
                 reg_acc_scope = st.text_input("Account Name", placeholder="e.g. Acme Corp", key="reg_acc_scope").strip()
                 reg_scope = st.text_input("Your Team(s)", placeholder="e.g. Alpha Team, Beta Team", key="reg_scope").strip()
@@ -351,7 +350,6 @@ if not st.session_state.authenticated:
             st.divider()
             new_pwd1 = st.text_input("New Password", type="password", key="new_pwd1", placeholder="At least 6 characters")
             new_pwd2 = st.text_input("Confirm New Password", type="password", key="new_pwd2")
-            
             rc1, rc2 = st.columns(2)
             with rc1:
                 if st.button("Reset Password", type="primary", use_container_width=True):
@@ -490,7 +488,6 @@ div.element-container:has([class^="marker-"]) + div.element-container button:act
 .action-critical { background:#fef2f2; border:1px solid #fecaca; border-left:5px solid #dc2626; padding:12px 14px; border-radius:10px; margin:8px 0; }
 .action-attention { background:#fffbeb; border:1px solid #fde68a; border-left:5px solid #d97706; padding:12px 14px; border-radius:10px; margin:8px 0; }
 hr { margin: 12px 0 !important; border-color:#e6ebf1 !important; }
-
 .filter-shell { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:10px 14px 4px; margin:8px 0 14px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
 .filter-caption { color:#64748b; font-size:12px; margin-top:-2px; }
 .filter-summary { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:2px 0 8px; }
@@ -1007,6 +1004,7 @@ def generate_html_email_body(df, report_title):
         proj = html_escape(row.get("Project / Dashboard", ""))
         owner = html_escape(row.get("Business Owner", ""))
         
+        # Elegant Name Extraction for Email HTML to prevent squishing
         raw_name = str(row.get("Resource Name", "")).strip()
         if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]:
             res = html_escape(raw_name)
@@ -1019,7 +1017,7 @@ def generate_html_email_body(df, report_title):
         due = html_escape(row.get("Updated Expected Delivery date", "N/A"))
         
         if status == "Completed": status_color = "#16a34a"
-        elif status in ["At Risk", "In Progress"]: status_color = "#ea580c"
+        elif status in ["At Risk", "In Progress", "On Hold"]: status_color = "#ea580c"
         elif status == "Blocked": status_color = "#dc2626"
         else: status_color = "#64748b"
 
@@ -1042,18 +1040,32 @@ def generate_html_email_body(df, report_title):
 
     highlights_html = ""
     action_items = build_action_items(df)
-    critical_items = [x for x in action_items if x["Priority"] == "Critical"]
     
-    if critical_items:
-        for item in critical_items[:4]:
-            highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item['Project / Dashboard'])}:</strong> {html_escape(item['Reason'])}. <em>Action: {html_escape(item['Recommended Action'])}</em></li>"""
-    else:
-        recent_updates = df[df["This Week Delivered"].astype(str).str.strip() != ""].head(4)
-        if not recent_updates.empty:
-            for _, row in recent_updates.iterrows():
-                highlights_html += f"""<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(row.get('Project / Dashboard', 'N/A'))}:</strong> {html_escape(row.get('This Week Delivered', ''))}</li>"""
-        else:
-            highlights_html = """<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>"""
+    added_projects = set()
+    count = 0
+    
+    # 1. Pull high-priority risks first
+    for item in action_items:
+        if count >= 4: break
+        highlights_html += f'<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(item["Project / Dashboard"])}:</strong> {html_escape(item["Reason"])}. <em>Action: {html_escape(item["Recommended Action"])}</em></li>'
+        added_projects.add(item["Project / Dashboard"])
+        count += 1
+        
+    # 2. Fill remaining slots with recent positive deliveries
+    if count < 4:
+        for _, row in df.iterrows():
+            if count >= 4: break
+            proj = row.get("Project / Dashboard", "")
+            if proj in added_projects: continue
+            
+            deliv = str(row.get("This Week Delivered", "")).strip()
+            if deliv and deliv.lower() not in ["none", "na", "n/a", "nan", "none reported.", ""]:
+                highlights_html += f'<li style="margin-bottom: 8px;"><span style="color: #ea580c;">■</span> <strong>{html_escape(proj)}:</strong> {html_escape(deliv)}</li>'
+                added_projects.add(proj)
+                count += 1
+                
+    if count == 0:
+        highlights_html = '<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>'
             
     logo_src = "cid:factspan_logo" if os.path.exists("logo.png") else EMAIL_LOGO_URL
 

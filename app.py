@@ -2348,12 +2348,10 @@ if nav_selection == "✍️ Enter Notes":
 # VIEW 2: WEEKLY SUMMARY
 # =========================================================
 elif nav_selection == "📋 Weekly Summary":
-    if df.empty:
+    if df.empty or filtered_df.empty:
         st.info("No data available to generate the summary. Go to 'Enter Notes' to log an update.")
     elif not has_active_filters:
         st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the dashboard. This prevents overloading the view with organization-wide data.")
-    elif filtered_df.empty:
-        st.warning("No records match your selected filters.")
     else:
         total_projects = len(filtered_df)
         total_resources = filtered_df["Resource"].nunique()
@@ -2381,5 +2379,518 @@ elif nav_selection == "📋 Weekly Summary":
         with s5: st.markdown(render_metric_card("UTILIZATION", f"{avg_util}%"), unsafe_allow_html=True)
 
         hscore, hcounts = portfolio_health(filtered_df)
-        hcolor = "#16a34a" if hscore >= 80 else ("#d97706" if hscore >= 60 else "#dc2626")The architecture you have designed is highly feasible, robust, and correctly addresses Streamlit's core limitation regarding background tasks. By decoupling the ephemeral Streamlit frontend (`app.py`) from the persistent cron-based email automation (`automation_runner.py` via GitHub Actions), you have chosen the exact right architectural pattern for this stack. 
+        hcolor = "#16a34a" if hscore >= 80 else ("#d97706" if hscore >= 60 else "#dc2626")
+        overdue = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Overdue")
+        due7 = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Next 7 Days")
+        slippages = [delivery_slippage_days(r) for _, r in filtered_df.iterrows() if delivery_slippage_days(r) > 0]
+        avg_slip = int(round(sum(slippages)/len(slippages))) if slippages else 0
+        
+        st.markdown(f"""
+        <div class='health-strip'>
+            <div class='health-title'>Portfolio Health</div>
+            <div style='display:flex;align-items:center;gap:18px;margin-top:3px'>
+                <div class='health-score'><span class='health-dot' style='background:{hcolor}'></span>{hscore}/100</div>
+                <div style='font-size:13px;color:#475569'>Healthy <b>{hcounts.get('Healthy',0)}</b> · Attention <b>{hcounts.get('Attention',0)}</b> · Critical <b>{hcounts.get('Critical',0)}</b></div>
+                <div style='font-size:13px;color:#475569;margin-left:auto'>Overdue <b>{overdue}</b> · Due in 7 days <b>{due7}</b> · Avg slippage <b>{avg_slip}d</b></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<div class="section-header">Delivery Outlook</div>', unsafe_allow_html=True)
+        o1,o2,o3,o4,o5 = st.columns(5)
+        buckets = Counter(delivery_bucket(r) for _,r in filtered_df.iterrows())
+        
+        for c,label in zip([o1,o2,o3,o4,o5], ["OVERDUE","NEXT 7 DAYS","8–14 DAYS","15+ DAYS","DELIVERED"]):
+            key_map = {"OVERDUE":"Overdue", "NEXT 7 DAYS":"Next 7 Days", "8–14 DAYS":"8–14 Days", "15+ DAYS":"15+ Days", "DELIVERED":"Delivered"}
+            with c: 
+                st.markdown(render_metric_card(label, buckets.get(key_map[label],0)), unsafe_allow_html=True)
 
+        st.markdown('<div class="section-header">Project / Dashboard Status</div>', unsafe_allow_html=True)
+        html_lines = [
+            '<table class="custom-table">',
+            '<thead><tr><th>Resource Email</th><th>Business Owner</th><th>Project / Dashboard</th><th>Expected Delivery</th><th>Completion</th><th>Utilization</th><th>Status</th></tr></thead>',
+            '<tbody>'
+        ]
+        for _, row in filtered_df.iterrows():
+            raw_status = row['Status']
+            if raw_status == "On Track": pill = "status-on-track"
+            elif raw_status == "At Risk": pill = "status-in-progress" 
+            elif raw_status == "Blocked": pill = "status-blocked"
+            elif raw_status == "Completed": pill = "status-completed"
+            else: pill = "status-not-started"
+            display_status = "In Progress" if raw_status == "At Risk" else raw_status
+            
+            row_html = (
+                f"<tr>"
+                f"<td>{html_escape(row['Resource'])}</td>"
+                f"<td>{html_escape(row['Business Owner'])}</td>"
+                f"<td><span class='proj-name'>{html_escape(row['Project / Dashboard'])}</span><span class='work-type'>{html_escape(row['Work Type'])}</span></td>"
+                f"<td>{html_escape(row['Updated Expected Delivery date'])}</td>"
+                f"<td>{html_escape(row['Completion %'])}</td>"
+                f"<td>{html_escape(row['Utilization %'])}</td>"
+                f"<td><span class='status-pill {pill}'>{html_escape(display_status)}</span></td>"
+                f"</tr>"
+            )
+            html_lines.append(row_html)
+        html_lines.append("</tbody></table>")
+        st.markdown("".join(html_lines), unsafe_allow_html=True)
+
+        st.markdown('<div class="section-header">What Changed?</div>', unsafe_allow_html=True)
+        single_year = filter_year[0] if len(filter_year) == 1 else None
+        single_month = filter_month[0] if len(filter_month) == 1 else None
+        single_week = filter_week[0] if len(filter_week) == 1 else None
+        prior_df = get_latest_prior_week(df, single_year, single_month, single_week) if single_year and single_month and single_week else pd.DataFrame()
+        movement_df = compare_current_to_prior(filtered_df, prior_df)
+        
+        if movement_df.empty:
+            st.info("Select exactly one Year, Month and Week to see project-level week-over-week movement.")
+        else:
+            mv1, mv2, mv3, mv4 = st.columns(4)
+            with mv1: st.markdown(render_metric_card("NEW", int((movement_df["Movement"] == "New").sum())), unsafe_allow_html=True)
+            with mv2: st.markdown(render_metric_card("IMPROVED", int((movement_df["Movement"] == "Improved").sum())), unsafe_allow_html=True)
+            with mv3: st.markdown(render_metric_card("DECLINED", int((movement_df["Movement"] == "Declined").sum())), unsafe_allow_html=True)
+            with mv4: st.markdown(render_metric_card("STABLE", int((movement_df["Movement"] == "Stable").sum())), unsafe_allow_html=True)
+            
+            improved_count = int((movement_df["Movement"] == "Improved").sum())
+            declined = movement_df[movement_df["Movement"] == "Declined"]
+            
+            st.markdown(
+                f"<div class='mini-insight'>📌 <b>Management insight:</b> {improved_count} item(s) improved, "
+                f"{len(declined)} declined and {int((movement_df['Movement']=='New').sum())} are new in the selected period.</div>", 
+                unsafe_allow_html=True
+            )
+            
+            if not declined.empty:
+                st.warning("Completion declines of 10+ points were detected in the current selection.")
+                st.dataframe(declined[["Project / Dashboard","Resource","Completion Δ","Status Change"]], use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="section-header">Trend & Momentum</div>', unsafe_allow_html=True)
+        tr1, tr2 = st.columns([1.5, 6.5])
+        with tr1: 
+            trend_periods = st.selectbox("History", [4,8,12], index=1, key="trend_periods", format_func=lambda x:f"Last {x} reported weeks")
+        with tr2: 
+            st.caption("Historical performance uses the same weekly records already stored in Google Sheets; no new data source is introduced.")
+            
+        trend_df = historical_trend(df, trend_periods)
+        if trend_df.empty: 
+            st.info("Not enough historical weekly data for a trend view.")
+        else: 
+            st.dataframe(trend_df, use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="section-header">Commitment vs Actual</div>', unsafe_allow_html=True)
+        positive_slip = [delivery_slippage_days(r) for _,r in filtered_df.iterrows() if delivery_slippage_days(r)>0]
+        slip1, slip2, slip3 = st.columns(3)
+        with slip1: 
+            st.markdown(render_metric_card("REVISED DELIVERY", len(positive_slip)), unsafe_allow_html=True)
+        with slip2: 
+            st.markdown(render_metric_card("AVG SLIPPAGE", f"{int(round(sum(positive_slip)/len(positive_slip))) if positive_slip else 0}d"), unsafe_allow_html=True)
+        with slip3: 
+            st.markdown(render_metric_card("MAX SLIPPAGE", f"{max(positive_slip) if positive_slip else 0}d"), unsafe_allow_html=True)
+
+        st.markdown('<div class="section-header">Blockers & Risks</div>', unsafe_allow_html=True)
+        if risk_count == 0: 
+            st.success("No active blockers or risks reported this week! 🎉")
+        else:
+            for _, row in risk_items.iterrows():
+                blocker_text = row['Blocker'] if row['Blocker'] else f"Status marked as: {row['Status']}"
+                st.markdown(f'<div class="risk-box"><div class="risk-title">⚠️ {row["Project / Dashboard"]}</div><div class="risk-desc">{blocker_text}</div></div>', unsafe_allow_html=True)
+
+# =========================================================
+# VIEW 3: EXECUTIVE REPORT (WITH SMART EDIT BUTTONS)
+# =========================================================
+elif nav_selection == "📈 Executive Report":
+    if df.empty:
+        st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
+    elif not has_active_filters:
+        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the dashboard. This prevents overloading the view with organization-wide data.")
+    elif filtered_df.empty:
+        st.warning("No records match your selected filters.")
+    else:
+        st.markdown('<div class="section-header">Portfolio Management View</div>', unsafe_allow_html=True)
+        hscore, hcounts = portfolio_health(filtered_df)
+        ec1, ec2, ec3, ec4 = st.columns([2, 2, 2, 4])
+        with ec1: 
+            st.caption(f"{len(filtered_df)} project update(s) in current selection")
+        with ec2: 
+            st.caption(f"{sum(1 for _, r in filtered_df.iterrows() if classify_attention(r)[0] == 'Critical')} critical item(s)")
+        with ec3: 
+            st.caption(f"Portfolio health: {hscore}/100")
+        with ec4:
+            compact_mode = st.toggle("Compact executive view", value=st.session_state.get("executive_compact", False), key="executive_compact_toggle", help="Switch between the detailed project cards and a dense management table.")
+            st.session_state.executive_compact = compact_mode
+            
+        if st.session_state.executive_compact:
+            compact_rows = []
+            for _, r in filtered_df.iterrows():
+                hs = health_score(r)
+                compact_rows.append({
+                    "Account": r.get("Account",""),
+                    "Team": r.get("Team",""),
+                    "Project": r.get("Project / Dashboard",""),
+                    "Owner": r.get("Business Owner",""),
+                    "Status": r.get("Status",""),
+                    "Completion": r.get("Completion %",""),
+                    "Delivery": delivery_state(r),
+                    "Health": f"{hs}/100 · {health_label(hs)}",
+                    "Risk": suggested_action(r) if classify_attention(r)[0] != "Normal" else "—"
+                })
+            st.dataframe(pd.DataFrame(compact_rows), use_container_width=True, hide_index=True)
+        else:
+            for account_name in filtered_df["Account"].dropna().unique():
+                st.markdown(f"<div class='acc-header'>🏢 {account_name}</div>", unsafe_allow_html=True)
+                account_data = filtered_df[filtered_df["Account"] == account_name]
+                
+                for team_name in account_data["Team"].dropna().unique():
+                    st.markdown(f"<div class='team-header'>{team_name}</div>", unsafe_allow_html=True)
+                    team_data = account_data[account_data["Team"] == team_name]
+                    
+                    for resource_name in team_data["Resource"].dropna().unique():
+                        resource_data = team_data[team_data["Resource"] == resource_name]
+                        with st.expander(f"👤 {resource_name} ({len(resource_data)} updates)", expanded=True):
+                            for index, row in resource_data.iterrows():
+                                rec_id = row.get('id')
+                                
+                                if st.session_state.edit_id == rec_id:
+                                    with st.container(border=True):
+                                        st.markdown(f"<div class='edit-banner'>✏️ Editing: {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
+                                        e_r1c1, e_r1c2, e_r1c3 = st.columns(3)
+                                        
+                                        e_proj = e_r1c1.text_input("Project Name", value=row.get('Project / Dashboard', ''), key=f"ep_{rec_id}")
+                                        e_bo = e_r1c2.text_input("Business Owner", value=row.get('Business Owner', ''), key=f"ebo_{rec_id}")
+                                        
+                                        wt_options = ["Development", "Enhancement", "Adhoc", "Migration", "Other"]
+                                        existing_wt = row.get('Work Type', '')
+                                        wt_idx = wt_options.index(existing_wt) if existing_wt in wt_options else 4
+                                        
+                                        e_wt_sel = e_r1c3.selectbox("Work Type", wt_options, index=wt_idx, key=f"ewtsel_{rec_id}")
+                                        if e_wt_sel == "Other": 
+                                            e_wt = e_r1c3.text_input("Specify Work Type", value=existing_wt if existing_wt not in wt_options else "", key=f"ewt_{rec_id}")
+                                        else: 
+                                            e_wt = e_wt_sel
+                                            
+                                        e_r2c1, e_r2c2, e_r2c3 = st.columns(3)
+                                        e_start = e_r2c1.date_input("Start Date", value=parse_date(row.get('Start date')), key=f"esd_{rec_id}")
+                                        e_init = e_r2c2.date_input("Initial Delivery", value=parse_date(row.get('Initial Delivery date')), key=f"eid_{rec_id}")
+                                        e_upd = e_r2c3.date_input("Updated Delivery", value=parse_date(row.get('Updated Expected Delivery date')), key=f"eud_{rec_id}")
+                                        
+                                        e_r3c1, e_r3c2, e_r3c3 = st.columns(3)
+                                        status_opts = ["On Track", "At Risk", "Blocked", "Completed", "Not Started", "On Hold", "Cancelled"]
+                                        curr_status = row.get('Status', 'On Track')
+                                        if curr_status not in status_opts: 
+                                            curr_status = "On Track"
+                                            
+                                        e_status = e_r3c1.selectbox("Status", status_opts, index=status_opts.index(curr_status), key=f"estat_{rec_id}")
+                                        e_comp = e_r3c2.number_input("Completion %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Completion %', '0'))), key=f"ecomp_{rec_id}")
+                                        e_util = e_r3c3.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Utilization %', '0'))), key=f"eutil_{rec_id}")
+                                        
+                                        e_tw = st.text_area("This Week Delivered", value=str(row.get('This Week Delivered', '')), height=85, key=f"etw_{rec_id}")
+                                        e_nw = st.text_area("Next Week Priority", value=str(row.get('Next Week Priority', '')), height=85, key=f"enw_{rec_id}")
+                                        e_block = st.text_area("Blocker / Risks", value=str(row.get('Blocker', '')), height=68, key=f"eb_{rec_id}")
+                                        
+                                        st.divider()
+                                        e_btn_c1, e_btn_c2, _ = st.columns([2, 2, 6])
+                                        with e_btn_c1:
+                                            if st.button("💾 Save Changes", type="primary", key=f"esave_{rec_id}", use_container_width=True):
+                                                if not user_can_edit_row(row):
+                                                    st.error("Authorization failed. This record was not changed.")
+                                                else:
+                                                    updated_data = {
+                                                        "id": rec_id, "Account": account_name, "Team": team_name, "Year": row.get("Year"), "Month": row.get("Month"), "Week": row.get("Week"), "Resource": resource_name, "Resource Name": row.get("Resource Name", st.session_state.get("current_name", "")),
+                                                        "Project / Dashboard": e_proj, "Business Owner": e_bo, "Work Type": e_wt,
+                                                        "Start date": str(e_start) if e_start else "N/A", "Initial Delivery date": str(e_init) if e_init else "N/A", "Updated Expected Delivery date": str(e_upd) if e_upd else "N/A",
+                                                        "Status": e_status, "Completion %": f"{e_comp}%", "Utilization %": f"{e_util}%",
+                                                        "This Week Delivered": e_tw, "Next Week Priority": e_nw, "Blocker": e_block
+                                                    }
+                                                    with st.spinner("Updating Google Sheets..."):
+                                                        update_existing_note_in_gsheets(updated_data)
+                                                        write_audit_event("UPDATE", rec_id, row.to_dict(), updated_data)
+                                                        st.session_state.notes_db = load_data_from_gsheets()
+                                                        st.session_state.data_synced = True
+                                                        st.session_state.last_refresh_at = datetime.now(IST)
+                                                    st.session_state.edit_id = None
+                                                    st.session_state.show_success = True
+                                                    st.session_state.success_message = "Cloud update saved successfully."
+                                                    st.rerun()
+                                        with e_btn_c2:
+                                            if st.button("Cancel", key=f"ecancel_{rec_id}", use_container_width=True):
+                                                st.session_state.edit_id = None
+                                                st.rerun()
+                                else:
+                                    with st.container(border=True):
+                                        h_col1, h_col2 = st.columns([9, 1])
+                                        with h_col1:
+                                            st.markdown(f"<div class='card-title'> {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {html_escape(row.get('Business Owner',''))} &nbsp;|&nbsp; <b>Type:</b> {html_escape(row.get('Work Type',''))}</span>", unsafe_allow_html=True)
+                                        with h_col2:
+                                            if user_can_edit_row(row):
+                                                if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
+                                                    st.session_state.edit_id = rec_id
+                                                    st.rerun()
+                                            else:
+                                                st.markdown("<div style='color:#94a3b8; font-size:12px; text-align:center; padding-top:10px;'>🔒 View Only</div>", unsafe_allow_html=True)
+
+                                        c1, c2, c3 = st.columns([2, 2, 1])
+                                        with c1:
+                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>THIS WEEK DELIVERED</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('This Week Delivered','')) if str(row.get('This Week Delivered','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Start: <b>{html_escape(row.get('Start date',''))}</b></div>", unsafe_allow_html=True)
+                                        with c2:
+                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>NEXT WEEK PRIORITY</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('Next Week Priority','')) if str(row.get('Next Week Priority','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Expected Delivery: <b>{html_escape(row.get('Updated Expected Delivery date',''))}</b></div>", unsafe_allow_html=True)
+                                        with c3:
+                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>METRICS</div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between;'><span>Completion</span><b>{html_escape(row.get('Completion %',''))}</b></div>", unsafe_allow_html=True)
+                                            st.progress(get_pct_decimal(row.get('Completion %','')))
+                                            st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{html_escape(row.get('Utilization %',''))}</b></div>", unsafe_allow_html=True)
+                                            st.progress(get_pct_decimal(row.get('Utilization %','')))
+                                        
+                                        d_state = delivery_state(row)
+                                        d_flags = data_quality_flags(row)
+                                        if d_state.startswith("Overdue"):
+                                            st.markdown(f"<div class='risk-box' style='margin-top:10px'><div class='risk-title'>⏰ {html_escape(d_state)}</div><div class='risk-desc'>Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div></div>", unsafe_allow_html=True)
+                                        elif d_state.startswith("Due in"):
+                                            st.markdown(f"<div class='edit-banner' style='margin-top:10px'>📅 <b>{html_escape(d_state)}</b> · Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div>", unsafe_allow_html=True)
+                                        if d_flags:
+                                            st.markdown(f"<div class='edit-banner' style='margin-top:10px'>🧹 <b>Data quality:</b> {html_escape('; '.join(d_flags))}</div>", unsafe_allow_html=True)
+
+                                        if str(row.get("Blocker","")).strip().lower() not in ["none", "na", "n/a", ""]:
+                                            st.markdown(f"<div class='alert-card alert-danger' style='margin-top:14px; margin-bottom:0; background:#fef2f2; border-left:4px solid #dc2626; padding:10px;'><div class='alert-title' style='font-weight:bold; color:#b91c1c;'>⚠ Blocker</div><div class='alert-desc' style='font-size:13px; color:#450a0a;'>{html_escape(row.get('Blocker',''))}</div></div>", unsafe_allow_html=True)
+
+# =========================================================
+# VIEW 4: ACTION CENTER
+# =========================================================
+elif nav_selection == "🚦 Action Center":
+    if df.empty:
+        st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
+    elif not has_active_filters:
+        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the Action Center. This prevents overloading the view with organization-wide data.")
+    elif filtered_df.empty:
+        st.warning("No records match your selected filters.")
+    else:
+        action_items = build_action_items(filtered_df if not filtered_df.empty else df)
+        critical = [x for x in action_items if x["Priority"] == "Critical"]
+        attention = [x for x in action_items if x["Priority"] == "Attention"]
+        
+        a1, a2, a3, a4 = st.columns(4)
+        with a1: st.markdown(render_metric_card("CRITICAL", len(critical)), unsafe_allow_html=True)
+        with a2: st.markdown(render_metric_card("ATTENTION", len(attention)), unsafe_allow_html=True)
+        with a3: st.markdown(render_metric_card("OVERDUE", sum(1 for x in action_items if str(x["Delivery"]).startswith("Overdue"))), unsafe_allow_html=True)
+        with a4: st.markdown(render_metric_card("TOTAL FLAGGED", len(action_items)), unsafe_allow_html=True)
+        
+        st.markdown('<div class="section-header">Prioritized Work Items</div>', unsafe_allow_html=True)
+        if not action_items:
+            st.success("Everything is currently within the defined attention rules. 🎉")
+        else:
+            action_df = pd.DataFrame(action_items)
+            st.dataframe(action_df[["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]], use_container_width=True, hide_index=True)
+            
+        st.markdown('<div class="section-header">Resource Health & Workload</div>', unsafe_allow_html=True)
+        resource_rows=[]
+        for resource, grp in (filtered_df if not filtered_df.empty else df).groupby("Resource"):
+            avg_c = int(round(sum(pct_value(x) for x in grp["Completion %"])/max(1,len(grp))))
+            avg_u = int(round(sum(pct_value(x) for x in grp["Utilization %"])/max(1,len(grp))))
+            criticals = sum(1 for _,r in grp.iterrows() if classify_attention(r)[0]=="Critical")
+            workload = "High" if avg_u >= 85 else ("Low" if avg_u < 50 else "Balanced")
+            resource_rows.append({"Resource":resource,"Projects":len(grp),"Avg Completion":f"{avg_c}%","Avg Utilization":f"{avg_u}%","Critical":criticals,"Workload":workload})
+        if resource_rows: 
+            st.dataframe(pd.DataFrame(resource_rows), use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="section-header">Submission Compliance</div>', unsafe_allow_html=True)
+        scope_df = filtered_df if not filtered_df.empty else df
+        if not scope_df.empty:
+            compliance = scope_df.groupby("Resource").size().reset_index(name="Updates")
+            compliance["Coverage"] = compliance["Updates"].apply(lambda x: "Reported" if x else "Missing")
+            st.caption(f"Reporting coverage: {len(compliance)} resource(s) with at least one submitted update in the current selection.")
+            st.dataframe(compliance, use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="section-header">Data Quality Checks</div>', unsafe_allow_html=True)
+        dq_records = []
+        for _, row in (filtered_df if not filtered_df.empty else df).iterrows():
+            flags = data_quality_flags(row)
+            if flags:
+                dq_records.append({"Project / Dashboard": row.get("Project / Dashboard",""), "Resource": row.get("Resource",""), "Status": row.get("Status",""), "Issues": "; ".join(flags)})
+        if dq_records:
+            st.dataframe(pd.DataFrame(dq_records), use_container_width=True, hide_index=True)
+        else:
+            st.success("No data-quality exceptions detected.")
+
+# =========================================================
+# VIEW 5: AUTOMATION (SCHEDULED REPORTS, REMINDERS & ALERTS)
+# =========================================================
+elif nav_selection == "📅 Automation":
+    can_manage_schedules = st.session_state.get("current_role", "") in ("Team Lead", "Account Manager", "Admin")
+
+    st.markdown(
+        "<div class='mini-insight'>ℹ️ This tab configures <b>what</b> gets sent, <b>to whom</b>, and <b>when</b>. "
+        "The actual sending is performed by a small external scheduler (a script run every 15–30 minutes, e.g. via GitHub Actions or cron) "
+        "because Streamlit apps do not keep background timers running once nobody has the page open. "
+        "See <code>automation_runner.py</code> in the project repo for that piece.</div>",
+        unsafe_allow_html=True
+    )
+
+    if not can_manage_schedules:
+        st.info("Schedules are managed by Team Leads, Account Managers and Admins. You can still be added as a recipient of any schedule your lead sets up.")
+    else:
+        st.markdown('<div class="section-header">Create a Schedule</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                sched_account_options = list(st.session_state.accounts_db.keys())
+                sched_account = st.selectbox("Account", options=sched_account_options if sched_account_options else ["No accounts yet"], key="sched_account")
+            with sc2:
+                sched_team_options = st.session_state.accounts_db.get(sched_account, [])
+                sched_team = st.selectbox("Team", options=sched_team_options if sched_team_options else ["No teams yet"], key="sched_team")
+
+            sc3, sc4 = st.columns(2)
+            with sc3:
+                sched_report_type = st.selectbox("Report Type", ["Weekly Summary", "Executive Report"], key="sched_report_type")
+            with sc4:
+                sched_day = st.selectbox("Send Day", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], index=4, key="sched_day")
+
+            sc5, sc6 = st.columns(2)
+            with sc5:
+                sched_send_time = st.time_input("Send Time (IST)", value=datetime.strptime("17:00","%H:%M").time(), key="sched_send_time")
+            with sc6:
+                sched_reminder_time = st.time_input("Team Reminder Time (IST)", value=datetime.strptime("09:00","%H:%M").time(), help="Morning reminder sent to the team roster on the send day, prompting them to submit notes.", key="sched_reminder_time")
+
+            sched_recipients = st.text_input("Recipients (comma-separated)", value=st.session_state.get("current_email",""), key="sched_recipients", placeholder="lead@company.com, sponsor@company.com")
+            sched_cc = st.text_input("CC (optional)", key="sched_cc", placeholder="manager@company.com")
+            sched_roster = st.text_area(
+                "Team Roster — expected submitters (comma-separated emails)",
+                key="sched_roster",
+                placeholder="alice@company.com, bob@company.com, carol@company.com",
+                help="Used only for the compliance check: who is expected to submit weekly notes for this Account/Team before the report goes out."
+            )
+
+            if st.button("💾 Create Schedule", type="primary", key="create_schedule_btn"):
+                if not sched_account_options or not sched_team_options:
+                    st.error("Please create at least one Account/Team via 'Enter Notes' before setting up a schedule.")
+                elif not sched_recipients.strip():
+                    st.error("Please enter at least one recipient.")
+                elif not sched_roster.strip():
+                    st.error("Please enter the team roster (expected submitter emails) so compliance can be checked.")
+                else:
+                    new_schedule = {
+                        "Schedule_ID": str(uuid.uuid4()),
+                        "Account": sched_account,
+                        "Team": sched_team,
+                        "Report_Type": sched_report_type,
+                        "Recipients": sched_recipients.strip(),
+                        "CC": sched_cc.strip(),
+                        "Send_Day": sched_day,
+                        "Send_Time": sched_send_time.strftime("%H:%M"),
+                        "Reminder_Time": sched_reminder_time.strftime("%H:%M"),
+                        "Expected_Resources": sched_roster.strip(),
+                        "Created_By_Name": st.session_state.get("current_name",""),
+                        "Created_By_Email": st.session_state.get("current_email",""),
+                        "Active": "Y",
+                        "Last_Sent_Period": "",
+                        "Last_Reminder_Date": "",
+                        "Last_Alert_At": ""
+                    }
+                    with st.spinner("Saving schedule..."):
+                        save_schedule_to_gsheets(new_schedule)
+                        write_automation_log(new_schedule["Schedule_ID"], sched_account, sched_team, "CREATE", f"by {st.session_state.get('current_email','')}")
+                    st.success(f"Schedule created — {sched_report_type} for {sched_account} / {sched_team} every {sched_day} at {new_schedule['Send_Time']} IST.")
+                    st.rerun()
+
+    st.markdown('<div class="section-header">Existing Schedules</div>', unsafe_allow_html=True)
+    all_schedules = load_schedules_from_gsheets()
+
+    if not all_schedules:
+        st.info("No schedules configured yet.")
+    else:
+        role = st.session_state.get("current_role", "")
+        email = normalize_text(st.session_state.get("current_email", ""))
+        scopes = [normalize_text(x) for x in st.session_state.get("current_scope", "").split(",") if normalize_text(x)]
+        acc_scopes = [normalize_text(x) for x in st.session_state.get("current_acc_scope", "").split(",") if normalize_text(x)]
+
+        def schedule_visible(s):
+            if role == "Admin":
+                return True
+            if role == "Account Manager":
+                return normalize_text(s.get("Account")) in scopes
+            if role == "Team Lead":
+                return normalize_text(s.get("Team")) in scopes and normalize_text(s.get("Account")) in acc_scopes
+            return normalize_text(s.get("Created_By_Email")) == email
+
+        visible_schedules = [s for s in all_schedules if schedule_visible(s)]
+
+        if not visible_schedules:
+            st.info("No schedules are visible for your current role/scope.")
+        else:
+            for s in visible_schedules:
+                missing, expected, submitted, syear, smonth, sweek = missing_resources_for_schedule(s, df)
+                active = str(s.get("Active","Y")).strip().upper() != "N"
+                status_badge = "automation-active" if active else "automation-paused"
+                status_text = "ACTIVE" if active else "PAUSED"
+                compliance_badge = "automation-complete" if not missing else "automation-missing"
+                compliance_text = "All submitted" if not missing else f"{len(missing)} of {len(expected)} missing"
+
+                with st.container(border=True):
+                    st.markdown(
+                        f"<div class='card-title'>{html_escape(s.get('Report_Type',''))} · {html_escape(s.get('Account',''))} / {html_escape(s.get('Team',''))} "
+                        f"<span class='automation-badge {status_badge}'>{status_text}</span> "
+                        f"<span class='automation-badge {compliance_badge}'>{compliance_text}</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(
+                        f"<div style='font-size:13px;color:#667085;margin-top:4px;'>"
+                        f"Sends every <b>{html_escape(s.get('Send_Day',''))}</b> at <b>{html_escape(s.get('Send_Time',''))} IST</b> · "
+                        f"Team reminder at <b>{html_escape(s.get('Reminder_Time',''))} IST</b> · "
+                        f"Recipients: {html_escape(s.get('Recipients',''))}"
+                        + (f" · CC: {html_escape(s.get('CC',''))}" if str(s.get('CC','')).strip() else "")
+                        + f"<br>Current period: <b>{smonth} {syear} · {sweek}</b> — roster {len(expected)} · submitted {len(submitted)}"
+                        + (f" · <span style='color:#c2413d;font-weight:700;'>missing: {html_escape(', '.join(sorted(missing)))}</span>" if missing else "")
+                        + f"<br>Last sent for period: <b>{html_escape(s.get('Last_Sent_Period','') or '—')}</b>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    if role in ("Admin",) or normalize_text(s.get("Created_By_Email")) == email or (role == "Team Lead" and normalize_text(s.get("Team")) in scopes) or (role == "Account Manager" and normalize_text(s.get("Account")) in scopes):
+                        b1, b2, b3 = st.columns([1.4, 1.4, 3.2])
+                        with b1:
+                            toggle_label = "⏸ Pause" if active else "▶ Resume"
+                            if st.button(toggle_label, key=f"toggle_{s.get('Schedule_ID')}", use_container_width=True):
+                                update_schedule_in_gsheets({"Schedule_ID": s.get("Schedule_ID"), "Active": "N" if active else "Y"})
+                                write_automation_log(s.get("Schedule_ID"), s.get("Account"), s.get("Team"), "TOGGLE", "Paused" if active else "Resumed")
+                                st.rerun()
+                        with b2:
+                            if missing and st.button("📣 Send Alert Now", key=f"alert_{s.get('Schedule_ID')}", use_container_width=True):
+                                alert_html = (
+                                    f"<p>Hi,</p><p>The following team member(s) have not yet submitted weekly notes for "
+                                    f"<b>{html_escape(s.get('Account',''))} / {html_escape(s.get('Team',''))}</b> — {smonth} {syear}, {sweek}:</p>"
+                                    f"<ul>{''.join(f'<li>{html_escape(m)}</li>' for m in sorted(missing))}</ul>"
+                                    f"<p>Please submit before the scheduled report send time.</p>"
+                                )
+                                to_list = sorted(missing) + [s.get("Created_By_Email","")]
+                                ok, msg = send_plain_email(
+                                    f"Reminder: Weekly notes pending — {s.get('Account','')} / {s.get('Team','')}",
+                                    alert_html, to_list
+                                )
+                                if ok:
+                                    update_schedule_in_gsheets({"Schedule_ID": s.get("Schedule_ID"), "Last_Alert_At": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")})
+                                    write_automation_log(s.get("Schedule_ID"), s.get("Account"), s.get("Team"), "MANUAL_ALERT", msg)
+                                    st.success(msg)
+                                else:
+                                    st.error(msg)
+                        with b3:
+                            if st.button("🗑️ Delete Schedule", key=f"del_{s.get('Schedule_ID')}", use_container_width=True):
+                                update_schedule_in_gsheets({"Schedule_ID": s.get("Schedule_ID"), "Active": "N"})
+                                write_automation_log(s.get("Schedule_ID"), s.get("Account"), s.get("Team"), "DEACTIVATE", "Soft-deleted from UI")
+                                st.info("Schedule deactivated. (Rows are kept for audit history — contact an Admin for permanent removal.)")
+                                st.rerun()
+
+    st.markdown('<div class="section-header">How the automated send works</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="mini-insight">
+    <b>1. Roster check.</b> Each schedule has a team roster (expected submitter emails). Compliance is computed against the current
+    Year / Month / Week-of-month (week 1–5, matching how notes are entered).<br><br>
+    <b>2. Morning reminder.</b> At the configured <i>Team Reminder Time</i>, the roster gets a friendly reminder to submit notes.<br><br>
+    <b>3. Escalating alerts.</b> Starting 3 hours before <i>Send Time</i>, if anyone on the roster hasn't submitted, an alert goes to the
+    missing members and the schedule owner (team lead / account manager) — repeating every hour until either everyone has submitted or the report is sent.<br><br>
+    <b>4. Scheduled send.</b> At <i>Send Time</i> on <i>Send Day</i>, the report (PDF + HTML email, same layout as the in-app "Send Report" button)
+    goes out to Recipients/CC automatically, whether or not everyone submitted — the earlier alerts exist specifically to maximize submissions before this point.
+    </div>
+    """, unsafe_allow_html=True)

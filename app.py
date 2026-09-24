@@ -417,133 +417,6 @@ def update_existing_note_in_gsheets(updated_entry):
             break
 
 # =========================================================
-# AUTOMATION / SCHEDULED REPORTS — BACKEND HELPERS
-# =========================================================
-SCHEDULE_HEADERS = [
-    "Schedule_ID", "Account", "Team", "Report_Type", "Recipients", "CC",
-    "Send_Day", "Send_Time", "Reminder_Time", "Expected_Resources",
-    "Created_By_Name", "Created_By_Email", "Active",
-    "Last_Sent_Period", "Last_Reminder_Date", "Last_Alert_At"
-]
-
-def get_or_create_schedules_sheet():
-    client = get_gspread_client()
-    spreadsheet = client.open("Weekly Notes Database")
-    try:
-        sheet = spreadsheet.worksheet("Schedules")
-    except Exception:
-        sheet = spreadsheet.add_worksheet(title="Schedules", rows=1000, cols=len(SCHEDULE_HEADERS))
-        sheet.append_row(SCHEDULE_HEADERS)
-    return sheet
-
-def load_schedules_from_gsheets():
-    try:
-        sheet = get_or_create_schedules_sheet()
-        return sheet.get_all_records()
-    except Exception as e:
-        st.error(f"Failed to load automation schedules. Error: {e}")
-        return []
-
-def save_schedule_to_gsheets(schedule_dict):
-    sheet = get_or_create_schedules_sheet()
-    headers = sheet.row_values(1)
-    sheet.append_row([str(schedule_dict.get(col, "")) for col in headers])
-
-def update_schedule_in_gsheets(schedule_dict):
-    sheet = get_or_create_schedules_sheet()
-    records = sheet.get_all_records()
-    headers = sheet.row_values(1)
-    for idx, row in enumerate(records):
-        if str(row.get("Schedule_ID")) == str(schedule_dict.get("Schedule_ID")):
-            row_idx = idx + 2
-            merged = {**row, **schedule_dict}
-            update_values = [[str(merged.get(col, "")) for col in headers]]
-            sheet.update(f"A{row_idx}:{get_column_letter(len(headers))}{row_idx}", update_values)
-            return True
-    return False
-
-def write_automation_log(schedule_id, account, team, event, detail=""):
-    try:
-        client = get_gspread_client()
-        spreadsheet = client.open("Weekly Notes Database")
-        try:
-            sheet = spreadsheet.worksheet("Automation_Log")
-        except Exception:
-            sheet = spreadsheet.add_worksheet(title="Automation_Log", rows=1000, cols=6)
-            sheet.append_row(["Timestamp", "Schedule_ID", "Account", "Team", "Event", "Detail"])
-        sheet.append_row([
-            datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-            str(schedule_id), str(account), str(team), str(event), str(detail)
-        ])
-    except Exception:
-        pass
-
-def compute_current_period():
-    now = datetime.now(IST)
-    year = now.year
-    month = now.strftime("%B")
-    week_num = min(5, ((now.day - 1) // 7) + 1)
-    week = f"Week {week_num}"
-    return year, month, week
-
-def missing_resources_for_schedule(schedule, notes_df):
-    year, month, week = compute_current_period()
-    expected = set(
-        e.strip().lower() for e in str(schedule.get("Expected_Resources", "")).split(",") if e.strip()
-    )
-    if notes_df is None or notes_df.empty or not expected:
-        return expected, expected, set(), year, month, week
-
-    subset = notes_df[
-        (notes_df.get("Account") == schedule.get("Account")) &
-        (notes_df.get("Team") == schedule.get("Team")) &
-        (notes_df.get("Year").astype(str) == str(year)) &
-        (notes_df.get("Month") == month) &
-        (notes_df.get("Week") == week)
-    ] if not notes_df.empty else pd.DataFrame()
-
-    submitted = set(str(x).strip().lower() for x in subset["Resource"]) if not subset.empty and "Resource" in subset.columns else set()
-    missing = expected - submitted
-    return missing, expected, submitted, year, month, week
-
-def send_plain_email(subject, body_html, recipients, cc_recipients=None):
-    recipients, _ = _validated_emails([x.strip() for x in recipients if x and x.strip()])
-    cc_recipients, _ = _validated_emails([x.strip() for x in (cc_recipients or []) if x and x.strip()])
-    if not recipients:
-        return False, "No valid recipient email address."
-
-    cfg = st.secrets if hasattr(st, "secrets") else {}
-    host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
-    port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
-    username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", ""))
-    password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
-    sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
-    use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
-
-    if not host or not sender:
-        return False, "Email sending is not configured (SMTP secrets missing)."
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = ", ".join(recipients)
-    if cc_recipients:
-        msg["Cc"] = ", ".join(cc_recipients)
-    msg.set_content("This message requires an HTML-capable email client to view.")
-    msg.add_alternative(body_html, subtype="html")
-
-    try:
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            if use_tls:
-                server.starttls()
-            if username and password:
-                server.login(username, password)
-            server.send_message(msg)
-        return True, f"Sent to {', '.join(recipients)}."
-    except Exception as exc:
-        return False, f"Unable to send: {exc}"
-
-# =========================================================
 # PREMIUM UI SYSTEM
 # =========================================================
 st.markdown("""
@@ -694,7 +567,7 @@ def html_escape(value):
 def safe_pdf_text(value):
     text = "" if value is None else str(value)
     replacements = {
-        "–":"-", "—":"-", "’":"'", "“":"\"", "”":"\"", 
+        "–":"-", "—":"-", "'":"'", "\u201c":"\"", "\u201d":"\"", 
         "•":"-", "✓":"OK", "⚠":"!", "×":"x"
     }
     for old, new in replacements.items(): 
@@ -760,6 +633,14 @@ def user_can_edit_row(row):
     if role == "Team Lead": 
         return row_team in scopes and row_acc in acc_scopes
     return row_email == email
+
+def row_project_key(row):
+    return "|".join([
+        normalize_text(row.get("Account")),
+        normalize_text(row.get("Team")),
+        normalize_text(row.get("Resource")),
+        normalize_text(row.get("Project / Dashboard"))
+    ])
 
 def row_submission_key(row):
     return "|".join(normalize_text(row.get(k)) for k in [
@@ -936,7 +817,7 @@ def resource_utilization(df):
     for _, group in df.groupby("Resource"):
         nums = [pct_value(v) for v in group["Utilization %"]]
         if nums: 
-            vals.append(sum(nums)/len(nums))
+            vals.append(sum(nums)) # SUM instead of sum/len to accurately reflect total allocation
     return int(round(sum(vals)/len(vals))) if vals else 0
 
 def delivery_slippage_days(row):
@@ -2408,7 +2289,7 @@ elif nav_selection == "📋 Weekly Summary":
         st.markdown('<div class="section-header">Project / Dashboard Status</div>', unsafe_allow_html=True)
         html_lines = [
             '<table class="custom-table">',
-            '<thead><tr><th>Resource Email</th><th>Business Owner</th><th>Project / Dashboard</th><th>Expected Delivery</th><th>Completion</th><th>Utilization</th><th>Status</th></tr></thead>',
+            '<thead><tr><th>Resource Email</th><th>Business Owner</th><th>Project / Dashboard</th><th>Expected Delivery</th><th>Completion</th><th>Total Utilization</th><th>Status</th></tr></thead>',
             '<tbody>'
         ]
         for _, row in filtered_df.iterrows():
@@ -2665,8 +2546,6 @@ elif nav_selection == "🚦 Action Center":
         st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
     elif not has_active_filters:
         st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the Action Center. This prevents overloading the view with organization-wide data.")
-    elif filtered_df.empty:
-        st.warning("No records match your selected filters.")
     else:
         action_items = build_action_items(filtered_df if not filtered_df.empty else df)
         critical = [x for x in action_items if x["Priority"] == "Critical"]
@@ -2689,10 +2568,10 @@ elif nav_selection == "🚦 Action Center":
         resource_rows=[]
         for resource, grp in (filtered_df if not filtered_df.empty else df).groupby("Resource"):
             avg_c = int(round(sum(pct_value(x) for x in grp["Completion %"])/max(1,len(grp))))
-            avg_u = int(round(sum(pct_value(x) for x in grp["Utilization %"])/max(1,len(grp))))
+            sum_u = int(round(sum(pct_value(x) for x in grp["Utilization %"])))
             criticals = sum(1 for _,r in grp.iterrows() if classify_attention(r)[0]=="Critical")
-            workload = "High" if avg_u >= 85 else ("Low" if avg_u < 50 else "Balanced")
-            resource_rows.append({"Resource":resource,"Projects":len(grp),"Avg Completion":f"{avg_c}%","Avg Utilization":f"{avg_u}%","Critical":criticals,"Workload":workload})
+            workload = "High" if sum_u >= 85 else ("Low" if sum_u < 50 else "Balanced")
+            resource_rows.append({"Resource":resource,"Projects":len(grp),"Avg Completion":f"{avg_c}%","Total Utilization":f"{sum_u}%","Critical":criticals,"Workload":workload})
         if resource_rows: 
             st.dataframe(pd.DataFrame(resource_rows), use_container_width=True, hide_index=True)
 

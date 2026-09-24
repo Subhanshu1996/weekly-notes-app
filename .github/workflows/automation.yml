@@ -1,0 +1,51 @@
+# Save this file as: .github/workflows/automation.yml  (in your repo root)
+#
+# It runs automation_runner.py every 15 minutes so reminders, escalation
+# alerts and scheduled report sends fire close to their configured times.
+# GitHub Actions cron is UTC — the script itself does all IST conversion,
+# so you do not need to adjust the cron expression for timezone.
+
+name: Weekly Notes Automation
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 minutes, all day, every day
+  workflow_dispatch: {}       # lets you trigger a run manually from the Actions tab
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install gspread google-auth pandas fpdf2
+
+      - name: Run automation
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_USE_TLS: "true"
+        run: python automation_runner.py
+
+# SETUP NOTES
+# 1. In your GitHub repo: Settings -> Secrets and variables -> Actions -> New repository secret.
+#    Add GCP_SERVICE_ACCOUNT_JSON (paste the *entire* service-account JSON file content) and the
+#    SMTP_* secrets (same values you already put in Streamlit's secrets.toml).
+# 2. Commit this file to .github/workflows/automation.yml and commit automation_runner.py to the
+#    repo root (same folder as app.py).
+# 3. GitHub only runs scheduled workflows on the default branch, and may delay cron by a few
+#    minutes under load — the 20-minute tolerance window in automation_runner.py absorbs that.
+# 4. If you don't want GitHub Actions, the same script runs fine under any other scheduler
+#    (a small always-on VM with a cron entry, Cloud Run + Cloud Scheduler, Azure Functions timer, etc.) —
+#    just set the same environment variables there instead.

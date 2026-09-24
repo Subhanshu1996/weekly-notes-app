@@ -417,6 +417,133 @@ def update_existing_note_in_gsheets(updated_entry):
             break
 
 # =========================================================
+# AUTOMATION / SCHEDULED REPORTS — BACKEND HELPERS
+# =========================================================
+SCHEDULE_HEADERS = [
+    "Schedule_ID", "Account", "Team", "Report_Type", "Recipients", "CC",
+    "Send_Day", "Send_Time", "Reminder_Time", "Expected_Resources",
+    "Created_By_Name", "Created_By_Email", "Active",
+    "Last_Sent_Period", "Last_Reminder_Date", "Last_Alert_At"
+]
+
+def get_or_create_schedules_sheet():
+    client = get_gspread_client()
+    spreadsheet = client.open("Weekly Notes Database")
+    try:
+        sheet = spreadsheet.worksheet("Schedules")
+    except Exception:
+        sheet = spreadsheet.add_worksheet(title="Schedules", rows=1000, cols=len(SCHEDULE_HEADERS))
+        sheet.append_row(SCHEDULE_HEADERS)
+    return sheet
+
+def load_schedules_from_gsheets():
+    try:
+        sheet = get_or_create_schedules_sheet()
+        return sheet.get_all_records()
+    except Exception as e:
+        st.error(f"Failed to load automation schedules. Error: {e}")
+        return []
+
+def save_schedule_to_gsheets(schedule_dict):
+    sheet = get_or_create_schedules_sheet()
+    headers = sheet.row_values(1)
+    sheet.append_row([str(schedule_dict.get(col, "")) for col in headers])
+
+def update_schedule_in_gsheets(schedule_dict):
+    sheet = get_or_create_schedules_sheet()
+    records = sheet.get_all_records()
+    headers = sheet.row_values(1)
+    for idx, row in enumerate(records):
+        if str(row.get("Schedule_ID")) == str(schedule_dict.get("Schedule_ID")):
+            row_idx = idx + 2
+            merged = {**row, **schedule_dict}
+            update_values = [[str(merged.get(col, "")) for col in headers]]
+            sheet.update(f"A{row_idx}:{get_column_letter(len(headers))}{row_idx}", update_values)
+            return True
+    return False
+
+def write_automation_log(schedule_id, account, team, event, detail=""):
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open("Weekly Notes Database")
+        try:
+            sheet = spreadsheet.worksheet("Automation_Log")
+        except Exception:
+            sheet = spreadsheet.add_worksheet(title="Automation_Log", rows=1000, cols=6)
+            sheet.append_row(["Timestamp", "Schedule_ID", "Account", "Team", "Event", "Detail"])
+        sheet.append_row([
+            datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            str(schedule_id), str(account), str(team), str(event), str(detail)
+        ])
+    except Exception:
+        pass
+
+def compute_current_period():
+    now = datetime.now(IST)
+    year = now.year
+    month = now.strftime("%B")
+    week_num = min(5, ((now.day - 1) // 7) + 1)
+    week = f"Week {week_num}"
+    return year, month, week
+
+def missing_resources_for_schedule(schedule, notes_df):
+    year, month, week = compute_current_period()
+    expected = set(
+        e.strip().lower() for e in str(schedule.get("Expected_Resources", "")).split(",") if e.strip()
+    )
+    if notes_df is None or notes_df.empty or not expected:
+        return expected, expected, set(), year, month, week
+
+    subset = notes_df[
+        (notes_df.get("Account") == schedule.get("Account")) &
+        (notes_df.get("Team") == schedule.get("Team")) &
+        (notes_df.get("Year").astype(str) == str(year)) &
+        (notes_df.get("Month") == month) &
+        (notes_df.get("Week") == week)
+    ] if not notes_df.empty else pd.DataFrame()
+
+    submitted = set(str(x).strip().lower() for x in subset["Resource"]) if not subset.empty and "Resource" in subset.columns else set()
+    missing = expected - submitted
+    return missing, expected, submitted, year, month, week
+
+def send_plain_email(subject, body_html, recipients, cc_recipients=None):
+    recipients, _ = _validated_emails([x.strip() for x in recipients if x and x.strip()])
+    cc_recipients, _ = _validated_emails([x.strip() for x in (cc_recipients or []) if x and x.strip()])
+    if not recipients:
+        return False, "No valid recipient email address."
+
+    cfg = st.secrets if hasattr(st, "secrets") else {}
+    host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
+    port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
+    username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", ""))
+    password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
+    sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
+    use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+
+    if not host or not sender:
+        return False, "Email sending is not configured (SMTP secrets missing)."
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    if cc_recipients:
+        msg["Cc"] = ", ".join(cc_recipients)
+    msg.set_content("This message requires an HTML-capable email client to view.")
+    msg.add_alternative(body_html, subtype="html")
+
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            if use_tls:
+                server.starttls()
+            if username and password:
+                server.login(username, password)
+            server.send_message(msg)
+        return True, f"Sent to {', '.join(recipients)}."
+    except Exception as exc:
+        return False, f"Unable to send: {exc}"
+
+# =========================================================
 # PREMIUM UI SYSTEM
 # =========================================================
 st.markdown("""
@@ -450,6 +577,8 @@ div.element-container:has(.marker-nav3-inactive) + div.element-container button 
 div.element-container:has(.marker-nav3-active) + div.element-container button { background: linear-gradient(to bottom, #ea580c, #c2410c) !important; border-color: #9a3412 !important; box-shadow: 0 3px 0 #9a3412, 0 4px 8px rgba(234,88,12,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-nav4-inactive) + div.element-container button { background: linear-gradient(to bottom, #f8fafc, #fff1f2) !important; border-color: #fecdd3 !important; box-shadow: 0 3px 0 #fecdd3, 0 4px 6px rgba(0,0,0,0.05) !important; color: #9f1239 !important; }
 div.element-container:has(.marker-nav4-active) + div.element-container button { background: linear-gradient(to bottom, #ef4444, #b91c1c) !important; border-color: #7f1d1d !important; box-shadow: 0 3px 0 #7f1d1d, 0 4px 8px rgba(239,68,68,0.3) !important; color: #ffffff !important; }
+div.element-container:has(.marker-nav5-inactive) + div.element-container button { background: linear-gradient(to bottom, #f5f3ff, #ede9fe) !important; border-color: #c4b5fd !important; box-shadow: 0 3px 0 #c4b5fd, 0 4px 6px rgba(0,0,0,0.05) !important; color: #5b21b6 !important; }
+div.element-container:has(.marker-nav5-active) + div.element-container button { background: linear-gradient(to bottom, #7c3aed, #5b21b6) !important; border-color: #4c1d95 !important; box-shadow: 0 3px 0 #4c1d95, 0 4px 8px rgba(124,58,237,0.3) !important; color: #ffffff !important; }
 div.element-container:has(.marker-send) + div.element-container button { background: linear-gradient(to bottom, #f5f3ff, #ede9fe) !important; border-color: #c4b5fd !important; box-shadow: 0 3px 0 #c4b5fd, 0 4px 6px rgba(0,0,0,0.05) !important; color: #5b21b6 !important; }
 div.element-container:has(.marker-pdf) + div.element-container button { background: linear-gradient(to bottom, #fff1f2, #ffe4e6) !important; border-color: #fecdd3 !important; box-shadow: 0 3px 0 #fecdd3, 0 4px 6px rgba(0,0,0,0.05) !important; color: #9f1239 !important; }
 div.element-container:has(.marker-excel) + div.element-container button { background: linear-gradient(to bottom, #ecfdf5, #d1fae5) !important; border-color: #a7f3d0 !important; box-shadow: 0 3px 0 #a7f3d0, 0 4px 6px rgba(0,0,0,0.05) !important; color: #065f46 !important; }
@@ -500,6 +629,12 @@ hr { margin: 12px 0 !important; border-color:#e6ebf1 !important; }
 .login-meta { text-align:center; color:#94a3b8; font-size:11px; margin-top:8px; }
 .section-note { color:#64748b; font-size:12px; margin-top:-5px; margin-bottom:8px; }
 .compact-row { border-bottom:1px solid #edf1f5; padding:9px 4px; }
+.automation-card { background:#fff; border:1px solid #dfe5ec; border-radius:14px; padding:16px 18px; margin-bottom:12px; box-shadow:0 2px 8px rgba(15,23,42,.04); }
+.automation-badge { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:800; letter-spacing:.3px; }
+.automation-active { background:#ecfdf5; color:#16805b; border:1px solid #a7f3d0; }
+.automation-paused { background:#f2f4f7; color:#667085; border:1px solid #d0d5dd; }
+.automation-missing { background:#fef2f2; color:#c2413d; border:1px solid #fecaca; }
+.automation-complete { background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -984,6 +1119,133 @@ def refresh_cloud_data(show_message=True):
                 st.session_state.accounts_db[acc] = live_df[live_df["Account"] == acc]["Team"].dropna().unique().tolist()
 
 # =========================================================
+# AUTOMATION / SCHEDULED REPORTS — BACKEND HELPERS
+# =========================================================
+SCHEDULE_HEADERS = [
+    "Schedule_ID", "Account", "Team", "Report_Type", "Recipients", "CC",
+    "Send_Day", "Send_Time", "Reminder_Time", "Expected_Resources",
+    "Created_By_Name", "Created_By_Email", "Active",
+    "Last_Sent_Period", "Last_Reminder_Date", "Last_Alert_At"
+]
+
+def get_or_create_schedules_sheet():
+    client = get_gspread_client()
+    spreadsheet = client.open("Weekly Notes Database")
+    try:
+        sheet = spreadsheet.worksheet("Schedules")
+    except Exception:
+        sheet = spreadsheet.add_worksheet(title="Schedules", rows=1000, cols=len(SCHEDULE_HEADERS))
+        sheet.append_row(SCHEDULE_HEADERS)
+    return sheet
+
+def load_schedules_from_gsheets():
+    try:
+        sheet = get_or_create_schedules_sheet()
+        return sheet.get_all_records()
+    except Exception as e:
+        st.error(f"Failed to load automation schedules. Error: {e}")
+        return []
+
+def save_schedule_to_gsheets(schedule_dict):
+    sheet = get_or_create_schedules_sheet()
+    headers = sheet.row_values(1)
+    sheet.append_row([str(schedule_dict.get(col, "")) for col in headers])
+
+def update_schedule_in_gsheets(schedule_dict):
+    sheet = get_or_create_schedules_sheet()
+    records = sheet.get_all_records()
+    headers = sheet.row_values(1)
+    for idx, row in enumerate(records):
+        if str(row.get("Schedule_ID")) == str(schedule_dict.get("Schedule_ID")):
+            row_idx = idx + 2
+            merged = {**row, **schedule_dict}
+            update_values = [[str(merged.get(col, "")) for col in headers]]
+            sheet.update(f"A{row_idx}:{get_column_letter(len(headers))}{row_idx}", update_values)
+            return True
+    return False
+
+def write_automation_log(schedule_id, account, team, event, detail=""):
+    try:
+        client = get_gspread_client()
+        spreadsheet = client.open("Weekly Notes Database")
+        try:
+            sheet = spreadsheet.worksheet("Automation_Log")
+        except Exception:
+            sheet = spreadsheet.add_worksheet(title="Automation_Log", rows=1000, cols=6)
+            sheet.append_row(["Timestamp", "Schedule_ID", "Account", "Team", "Event", "Detail"])
+        sheet.append_row([
+            datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            str(schedule_id), str(account), str(team), str(event), str(detail)
+        ])
+    except Exception:
+        pass
+
+def compute_current_period():
+    now = datetime.now(IST)
+    year = now.year
+    month = now.strftime("%B")
+    week_num = min(5, ((now.day - 1) // 7) + 1)
+    week = f"Week {week_num}"
+    return year, month, week
+
+def missing_resources_for_schedule(schedule, notes_df):
+    year, month, week = compute_current_period()
+    expected = set(
+        e.strip().lower() for e in str(schedule.get("Expected_Resources", "")).split(",") if e.strip()
+    )
+    if notes_df is None or notes_df.empty or not expected:
+        return expected, expected, set(), year, month, week
+
+    subset = notes_df[
+        (notes_df.get("Account") == schedule.get("Account")) &
+        (notes_df.get("Team") == schedule.get("Team")) &
+        (notes_df.get("Year").astype(str) == str(year)) &
+        (notes_df.get("Month") == month) &
+        (notes_df.get("Week") == week)
+    ] if not notes_df.empty else pd.DataFrame()
+
+    submitted = set(str(x).strip().lower() for x in subset["Resource"]) if not subset.empty and "Resource" in subset.columns else set()
+    missing = expected - submitted
+    return missing, expected, submitted, year, month, week
+
+def send_plain_email(subject, body_html, recipients, cc_recipients=None):
+    recipients, _ = _validated_emails([x.strip() for x in recipients if x and x.strip()])
+    cc_recipients, _ = _validated_emails([x.strip() for x in (cc_recipients or []) if x and x.strip()])
+    if not recipients:
+        return False, "No valid recipient email address."
+
+    cfg = st.secrets if hasattr(st, "secrets") else {}
+    host = cfg.get("SMTP_HOST", os.getenv("SMTP_HOST", ""))
+    port = int(cfg.get("SMTP_PORT", os.getenv("SMTP_PORT", "587")))
+    username = cfg.get("SMTP_USERNAME", os.getenv("SMTP_USERNAME", ""))
+    password = cfg.get("SMTP_PASSWORD", os.getenv("SMTP_PASSWORD", ""))
+    sender = cfg.get("SMTP_FROM", os.getenv("SMTP_FROM", username))
+    use_tls = str(cfg.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "true"))).lower() == "true"
+
+    if not host or not sender:
+        return False, "Email sending is not configured (SMTP secrets missing)."
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    if cc_recipients:
+        msg["Cc"] = ", ".join(cc_recipients)
+    msg.set_content("This message requires an HTML-capable email client to view.")
+    msg.add_alternative(body_html, subtype="html")
+
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            if use_tls:
+                server.starttls()
+            if username and password:
+                server.login(username, password)
+            server.send_message(msg)
+        return True, f"Sent to {', '.join(recipients)}."
+    except Exception as exc:
+        return False, f"Unable to send: {exc}"
+
+# =========================================================
 # REPORT GENERATORS (HTML Email, PDF, Excel)
 # =========================================================
 def generate_html_email_body(df, report_title):
@@ -1275,8 +1537,8 @@ def create_pdf_report(dataframe, header_title):
         pdf.ln(5)
         y0 = pdf.get_y()
         pdf.set_fill_color(37, 99, 235)
-        pdf.rect(13.5, y0 + 1, 1.0, 6, "F")  # OUTDENTED THIN LINE (1mm width, placed at 13.5mm)
-        pdf.set_xy(15, y0)                   # TEXT STRICTLY ALIGNED AT 15mm
+        pdf.rect(13.5, y0 + 1, 1.0, 6, "F")  # Perfect 1mm outdent alignment
+        pdf.set_xy(15, y0)
         pdf.set_text_color(22, 50, 79)
         pdf.set_font("Arial", "B", 13)
         pdf.cell(170, 8, safe_pdf_text(title), ln=True)
@@ -1642,9 +1904,9 @@ with util_c4:
         st.rerun()
 
 # Navigation
-labels = ["✍️ Enter Notes", "📋 Weekly Summary", "📈 Executive Report", "🚦 Action Center"]
-cols = st.columns([1,1,1,1,1.5]) 
-for col, label, m_idx in zip(cols[:4], labels, [1, 2, 3, 4]):
+labels = ["✍️ Enter Notes", "📋 Weekly Summary", "📈 Executive Report", "🚦 Action Center", "📅 Automation"]
+cols = st.columns([1,1,1,1,1.2])
+for col, label, m_idx in zip(cols[:5], labels, [1, 2, 3, 4, 5]):
     with col:
         state = "active" if st.session_state.nav_selection == label else "inactive"
         st.markdown(f'<div class="marker-nav{m_idx}-{state}"></div>', unsafe_allow_html=True)
@@ -1660,8 +1922,10 @@ elif nav_selection == "📈 Executive Report":
     st.markdown('<div class="page-head"><div class="page-title">📈 Executive Report</div><div class="page-subtitle">Executive portfolio view of delivery, ownership, utilization and risks.</div></div>', unsafe_allow_html=True)
 elif nav_selection == "🚦 Action Center":
     st.markdown('<div class="page-head"><div class="page-title">🚦 Action Center</div><div class="page-subtitle">Prioritized delivery risks, overdue work, data-quality issues and items needing management attention.</div></div>', unsafe_allow_html=True)
+elif nav_selection == "📅 Automation":
+    st.markdown('<div class="page-head"><div class="page-title">📅 Report Automation</div><div class="page-subtitle">Schedule recurring report emails, roster-based compliance checks, and reminder/escalation alerts.</div></div>', unsafe_allow_html=True)
 
-if nav_selection != "✍️ Enter Notes" and not df.empty:
+if nav_selection not in ("✍️ Enter Notes", "📅 Automation") and not df.empty:
     st.markdown("""
     <style>
     div[data-testid="stSelectbox"], div[data-testid="stMultiSelect"] {
@@ -1786,7 +2050,6 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
     reporting_month = format_badge_text(filter_month, month_options)
     reporting_week = format_badge_text(filter_week, week_options)
 
-    # Determine if any filters are currently applied
     has_active_filters = (
         filter_acc != "All" or 
         filter_team != "All" or 
@@ -1828,7 +2091,6 @@ if nav_selection != "✍️ Enter Notes" and not df.empty:
                     pdf_bytes = create_pdf_report(filtered_df, f"Executive Report: {reporting_month} - {reporting_week}")
                     st.markdown('<div class="marker-pdf"></div>', unsafe_allow_html=True)
                     st.download_button("📄 Export PDF", data=pdf_bytes, file_name="Weekly_Notes_Executive_Report.pdf", mime="application/pdf", key="pdf_tab3", use_container_width=True)
-
 else:
     if nav_selection == "✍️ Enter Notes": 
         filtered_df = df
@@ -2119,338 +2381,47 @@ elif nav_selection == "📋 Weekly Summary":
         with s5: st.markdown(render_metric_card("UTILIZATION", f"{avg_util}%"), unsafe_allow_html=True)
 
         hscore, hcounts = portfolio_health(filtered_df)
-        hcolor = "#16a34a" if hscore >= 80 else ("#d97706" if hscore >= 60 else "#dc2626")
-        overdue = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Overdue")
-        due7 = sum(1 for _, r in filtered_df.iterrows() if delivery_bucket(r) == "Next 7 Days")
-        slippages = [delivery_slippage_days(r) for _, r in filtered_df.iterrows() if delivery_slippage_days(r) > 0]
-        avg_slip = int(round(sum(slippages)/len(slippages))) if slippages else 0
-        
-        st.markdown(f"""
-        <div class='health-strip'>
-            <div class='health-title'>Portfolio Health</div>
-            <div style='display:flex;align-items:center;gap:18px;margin-top:3px'>
-                <div class='health-score'><span class='health-dot' style='background:{hcolor}'></span>{hscore}/100</div>
-                <div style='font-size:13px;color:#475569'>Healthy <b>{hcounts.get('Healthy',0)}</b> · Attention <b>{hcounts.get('Attention',0)}</b> · Critical <b>{hcounts.get('Critical',0)}</b></div>
-                <div style='font-size:13px;color:#475569;margin-left:auto'>Overdue <b>{overdue}</b> · Due in 7 days <b>{due7}</b> · Avg slippage <b>{avg_slip}d</b></div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown('<div class="section-header">Delivery Outlook</div>', unsafe_allow_html=True)
-        o1,o2,o3,o4,o5 = st.columns(5)
-        buckets = Counter(delivery_bucket(r) for _,r in filtered_df.iterrows())
-        
-        for c,label in zip([o1,o2,o3,o4,o5], ["OVERDUE","NEXT 7 DAYS","8–14 DAYS","15+ DAYS","DELIVERED"]):
-            key_map = {"OVERDUE":"Overdue", "NEXT 7 DAYS":"Next 7 Days", "8–14 DAYS":"8–14 Days", "15+ DAYS":"15+ Days", "DELIVERED":"Delivered"}
-            with c: 
-                st.markdown(render_metric_card(label, buckets.get(key_map[label],0)), unsafe_allow_html=True)
+        hcolor = "#16a34a" if hscore >= 80 else ("#d97706" if hscore >= 60 else "#dc2626")The architecture you have designed is highly feasible, robust, and correctly addresses Streamlit's core limitation regarding background tasks. By decoupling the ephemeral Streamlit frontend (`app.py`) from the persistent cron-based email automation (`automation_runner.py` via GitHub Actions), you have chosen the exact right architectural pattern for this stack. 
 
-        st.markdown('<div class="section-header">Project / Dashboard Status</div>', unsafe_allow_html=True)
-        html_lines = [
-            '<table class="custom-table">',
-            '<thead><tr><th>Resource Email</th><th>Business Owner</th><th>Project / Dashboard</th><th>Expected Delivery</th><th>Completion</th><th>Utilization</th><th>Status</th></tr></thead>',
-            '<tbody>'
-        ]
-        for _, row in filtered_df.iterrows():
-            raw_status = row['Status']
-            if raw_status == "On Track": pill = "status-on-track"
-            elif raw_status == "At Risk": pill = "status-in-progress" 
-            elif raw_status == "Blocked": pill = "status-blocked"
-            elif raw_status == "Completed": pill = "status-completed"
-            else: pill = "status-not-started"
-            display_status = "In Progress" if raw_status == "At Risk" else raw_status
-            
-            row_html = (
-                f"<tr>"
-                f"<td>{html_escape(row['Resource'])}</td>"
-                f"<td>{html_escape(row['Business Owner'])}</td>"
-                f"<td><span class='proj-name'>{html_escape(row['Project / Dashboard'])}</span><span class='work-type'>{html_escape(row['Work Type'])}</span></td>"
-                f"<td>{html_escape(row['Updated Expected Delivery date'])}</td>"
-                f"<td>{html_escape(row['Completion %'])}</td>"
-                f"<td>{html_escape(row['Utilization %'])}</td>"
-                f"<td><span class='status-pill {pill}'>{html_escape(display_status)}</span></td>"
-                f"</tr>"
-            )
-            html_lines.append(row_html)
-        html_lines.append("</tbody></table>")
-        st.markdown("".join(html_lines), unsafe_allow_html=True)
+Here is a step-by-step implementation guide to make the entire system fully functional, along with a few minor code gotchas to address before deployment.
 
-        st.markdown('<div class="section-header">What Changed?</div>', unsafe_allow_html=True)
-        single_year = filter_year[0] if len(filter_year) == 1 else None
-        single_month = filter_month[0] if len(filter_month) == 1 else None
-        single_week = filter_week[0] if len(filter_week) == 1 else None
-        prior_df = get_latest_prior_week(df, single_year, single_month, single_week) if single_year and single_month and single_week else pd.DataFrame()
-        movement_df = compare_current_to_prior(filtered_df, prior_df)
-        
-        if movement_df.empty:
-            st.info("Select exactly one Year, Month and Week to see project-level week-over-week movement.")
-        else:
-            mv1, mv2, mv3, mv4 = st.columns(4)
-            with mv1: st.markdown(render_metric_card("NEW", int((movement_df["Movement"] == "New").sum())), unsafe_allow_html=True)
-            with mv2: st.markdown(render_metric_card("IMPROVED", int((movement_df["Movement"] == "Improved").sum())), unsafe_allow_html=True)
-            with mv3: st.markdown(render_metric_card("DECLINED", int((movement_df["Movement"] == "Declined").sum())), unsafe_allow_html=True)
-            with mv4: st.markdown(render_metric_card("STABLE", int((movement_df["Movement"] == "Stable").sum())), unsafe_allow_html=True)
-            
-            improved_count = int((movement_df["Movement"] == "Improved").sum())
-            declined = movement_df[movement_df["Movement"] == "Declined"]
-            
-            st.markdown(
-                f"<div class='mini-insight'>📌 <b>Management insight:</b> {improved_count} item(s) improved, "
-                f"{len(declined)} declined and {int((movement_df['Movement']=='New').sum())} are new in the selected period.</div>", 
-                unsafe_allow_html=True
-            )
-            
-            if not declined.empty:
-                st.warning("Completion declines of 10+ points were detected in the current selection.")
-                st.dataframe(declined[["Project / Dashboard","Resource","Completion Δ","Status Change"]], use_container_width=True, hide_index=True)
+## 1. Google Cloud & Database Initialization
+The code expects a Google Sheet to act as the primary database. While the code creates individual worksheets (tabs) dynamically, the parent spreadsheet must exist first.
 
-        st.markdown('<div class="section-header">Trend & Momentum</div>', unsafe_allow_html=True)
-        tr1, tr2 = st.columns([1.5, 6.5])
-        with tr1: 
-            trend_periods = st.selectbox("History", [4,8,12], index=1, key="trend_periods", format_func=lambda x:f"Last {x} reported weeks")
-        with tr2: 
-            st.caption("Historical performance uses the same weekly records already stored in Google Sheets; no new data source is introduced.")
-            
-        trend_df = historical_trend(df, trend_periods)
-        if trend_df.empty: 
-            st.info("Not enough historical weekly data for a trend view.")
-        else: 
-            st.dataframe(trend_df, use_container_width=True, hide_index=True)
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Enable the **Google Sheets API** and **Google Drive API** for your project.
+3. Create a **Service Account** and generate a JSON key.
+4. Go to your personal or corporate Google Drive and create a new blank Google Sheet named exactly **Weekly Notes Database**.
+5. Click **Share** on that Google Sheet and share it with the `client_email` found inside your Service Account JSON file (give it **Editor** permissions).
 
-        st.markdown('<div class="section-header">Commitment vs Actual</div>', unsafe_allow_html=True)
-        positive_slip = [delivery_slippage_days(r) for _,r in filtered_df.iterrows() if delivery_slippage_days(r)>0]
-        slip1, slip2, slip3 = st.columns(3)
-        with slip1: 
-            st.markdown(render_metric_card("REVISED DELIVERY", len(positive_slip)), unsafe_allow_html=True)
-        with slip2: 
-            st.markdown(render_metric_card("AVG SLIPPAGE", f"{int(round(sum(positive_slip)/len(positive_slip))) if positive_slip else 0}d"), unsafe_allow_html=True)
-        with slip3: 
-            st.markdown(render_metric_card("MAX SLIPPAGE", f"{max(positive_slip) if positive_slip else 0}d"), unsafe_allow_html=True)
+## 2. Streamlit Secrets Configuration
+To run `app.py` locally or on Streamlit Community Cloud, you must configure your secrets. 
 
-        st.markdown('<div class="section-header">Blockers & Risks</div>', unsafe_allow_html=True)
-        if risk_count == 0: 
-            st.success("No active blockers or risks reported this week! 🎉")
-        else:
-            for _, row in risk_items.iterrows():
-                blocker_text = row['Blocker'] if row['Blocker'] else f"Status marked as: {row['Status']}"
-                st.markdown(f'<div class="risk-box"><div class="risk-title">⚠️ {row["Project / Dashboard"]}</div><div class="risk-desc">{blocker_text}</div></div>', unsafe_allow_html=True)
+If running locally, create a `.streamlit/secrets.toml` file in the root of your project:
 
-# =========================================================
-# VIEW 3: EXECUTIVE REPORT (WITH SMART EDIT BUTTONS)
-# =========================================================
-elif nav_selection == "📈 Executive Report":
-    if df.empty:
-        st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
-    elif not has_active_filters:
-        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the dashboard. This prevents overloading the view with organization-wide data.")
-    elif filtered_df.empty:
-        st.warning("No records match your selected filters.")
-    else:
-        st.markdown('<div class="section-header">Portfolio Management View</div>', unsafe_allow_html=True)
-        hscore, hcounts = portfolio_health(filtered_df)
-        ec1, ec2, ec3, ec4 = st.columns([2, 2, 2, 4])
-        with ec1: 
-            st.caption(f"{len(filtered_df)} project update(s) in current selection")
-        with ec2: 
-            st.caption(f"{sum(1 for _, r in filtered_df.iterrows() if classify_attention(r)[0] == 'Critical')} critical item(s)")
-        with ec3: 
-            st.caption(f"Portfolio health: {hscore}/100")
-        with ec4:
-            compact_mode = st.toggle("Compact executive view", value=st.session_state.get("executive_compact", False), key="executive_compact_toggle", help="Switch between the detailed project cards and a dense management table.")
-            st.session_state.executive_compact = compact_mode
-            
-        if st.session_state.executive_compact:
-            compact_rows = []
-            for _, r in filtered_df.iterrows():
-                hs = health_score(r)
-                compact_rows.append({
-                    "Account": r.get("Account",""),
-                    "Team": r.get("Team",""),
-                    "Project": r.get("Project / Dashboard",""),
-                    "Owner": r.get("Business Owner",""),
-                    "Status": r.get("Status",""),
-                    "Completion": r.get("Completion %",""),
-                    "Delivery": delivery_state(r),
-                    "Health": f"{hs}/100 · {health_label(hs)}",
-                    "Risk": suggested_action(r) if classify_attention(r)[0] != "Normal" else "—"
-                })
-            st.dataframe(pd.DataFrame(compact_rows), use_container_width=True, hide_index=True)
-        else:
-            for account_name in filtered_df["Account"].dropna().unique():
-                st.markdown(f"<div class='acc-header'>🏢 {account_name}</div>", unsafe_allow_html=True)
-                account_data = filtered_df[filtered_df["Account"] == account_name]
-                
-                for team_name in account_data["Team"].dropna().unique():
-                    st.markdown(f"<div class='team-header'>{team_name}</div>", unsafe_allow_html=True)
-                    team_data = account_data[account_data["Team"] == team_name]
-                    
-                    for resource_name in team_data["Resource"].dropna().unique():
-                        resource_data = team_data[team_data["Resource"] == resource_name]
-                        with st.expander(f"👤 {resource_name} ({len(resource_data)} updates)", expanded=True):
-                            for index, row in resource_data.iterrows():
-                                rec_id = row.get('id')
-                                
-                                if st.session_state.edit_id == rec_id:
-                                    with st.container(border=True):
-                                        st.markdown(f"<div class='edit-banner'>✏️ Editing: {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
-                                        e_r1c1, e_r1c2, e_r1c3 = st.columns(3)
-                                        
-                                        e_proj = e_r1c1.text_input("Project Name", value=row.get('Project / Dashboard', ''), key=f"ep_{rec_id}")
-                                        e_bo = e_r1c2.text_input("Business Owner", value=row.get('Business Owner', ''), key=f"ebo_{rec_id}")
-                                        
-                                        wt_options = ["Development", "Enhancement", "Adhoc", "Migration", "Other"]
-                                        existing_wt = row.get('Work Type', '')
-                                        wt_idx = wt_options.index(existing_wt) if existing_wt in wt_options else 4
-                                        
-                                        e_wt_sel = e_r1c3.selectbox("Work Type", wt_options, index=wt_idx, key=f"ewtsel_{rec_id}")
-                                        if e_wt_sel == "Other": 
-                                            e_wt = e_r1c3.text_input("Specify Work Type", value=existing_wt if existing_wt not in wt_options else "", key=f"ewt_{rec_id}")
-                                        else: 
-                                            e_wt = e_wt_sel
-                                            
-                                        e_r2c1, e_r2c2, e_r2c3 = st.columns(3)
-                                        e_start = e_r2c1.date_input("Start Date", value=parse_date(row.get('Start date')), key=f"esd_{rec_id}")
-                                        e_init = e_r2c2.date_input("Initial Delivery", value=parse_date(row.get('Initial Delivery date')), key=f"eid_{rec_id}")
-                                        e_upd = e_r2c3.date_input("Updated Delivery", value=parse_date(row.get('Updated Expected Delivery date')), key=f"eud_{rec_id}")
-                                        
-                                        e_r3c1, e_r3c2, e_r3c3 = st.columns(3)
-                                        status_opts = ["On Track", "At Risk", "Blocked", "Completed", "Not Started", "On Hold", "Cancelled"]
-                                        curr_status = row.get('Status', 'On Track')
-                                        if curr_status not in status_opts: 
-                                            curr_status = "On Track"
-                                            
-                                        e_status = e_r3c1.selectbox("Status", status_opts, index=status_opts.index(curr_status), key=f"estat_{rec_id}")
-                                        e_comp = e_r3c2.number_input("Completion %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Completion %', '0'))), key=f"ecomp_{rec_id}")
-                                        e_util = e_r3c3.number_input("Utilization %", min_value=0, max_value=100, step=5, value=int(pct_value(row.get('Utilization %', '0'))), key=f"eutil_{rec_id}")
-                                        
-                                        e_tw = st.text_area("This Week Delivered", value=str(row.get('This Week Delivered', '')), height=85, key=f"etw_{rec_id}")
-                                        e_nw = st.text_area("Next Week Priority", value=str(row.get('Next Week Priority', '')), height=85, key=f"enw_{rec_id}")
-                                        e_block = st.text_area("Blocker / Risks", value=str(row.get('Blocker', '')), height=68, key=f"eb_{rec_id}")
-                                        
-                                        st.divider()
-                                        e_btn_c1, e_btn_c2, _ = st.columns([2, 2, 6])
-                                        with e_btn_c1:
-                                            if st.button("💾 Save Changes", type="primary", key=f"esave_{rec_id}", use_container_width=True):
-                                                if not user_can_edit_row(row):
-                                                    st.error("Authorization failed. This record was not changed.")
-                                                else:
-                                                    updated_data = {
-                                                        "id": rec_id, "Account": account_name, "Team": team_name, "Year": row.get("Year"), "Month": row.get("Month"), "Week": row.get("Week"), "Resource": resource_name, "Resource Name": row.get("Resource Name", st.session_state.get("current_name", "")),
-                                                        "Project / Dashboard": e_proj, "Business Owner": e_bo, "Work Type": e_wt,
-                                                        "Start date": str(e_start) if e_start else "N/A", "Initial Delivery date": str(e_init) if e_init else "N/A", "Updated Expected Delivery date": str(e_upd) if e_upd else "N/A",
-                                                        "Status": e_status, "Completion %": f"{e_comp}%", "Utilization %": f"{e_util}%",
-                                                        "This Week Delivered": e_tw, "Next Week Priority": e_nw, "Blocker": e_block
-                                                    }
-                                                    with st.spinner("Updating Google Sheets..."):
-                                                        update_existing_note_in_gsheets(updated_data)
-                                                        write_audit_event("UPDATE", rec_id, row.to_dict(), updated_data)
-                                                        st.session_state.notes_db = load_data_from_gsheets()
-                                                        st.session_state.data_synced = True
-                                                        st.session_state.last_refresh_at = datetime.now(IST)
-                                                    st.session_state.edit_id = None
-                                                    st.session_state.show_success = True
-                                                    st.session_state.success_message = "Cloud update saved successfully."
-                                                    st.rerun()
-                                        with e_btn_c2:
-                                            if st.button("Cancel", key=f"ecancel_{rec_id}", use_container_width=True):
-                                                st.session_state.edit_id = None
-                                                st.rerun()
-                                else:
-                                    with st.container(border=True):
-                                        h_col1, h_col2 = st.columns([9, 1])
-                                        with h_col1:
-                                            st.markdown(f"<div class='card-title'> {html_escape(row.get('Project / Dashboard',''))}</div>", unsafe_allow_html=True)
-                                            st.markdown(f"<span style='font-size:14px; color:#667085;'><b>Owner:</b> {html_escape(row.get('Business Owner',''))} &nbsp;|&nbsp; <b>Type:</b> {html_escape(row.get('Work Type',''))}</span>", unsafe_allow_html=True)
-                                        with h_col2:
-                                            if user_can_edit_row(row):
-                                                if st.button("✏️ Edit", key=f"edit_btn_{rec_id}", use_container_width=True):
-                                                    st.session_state.edit_id = rec_id
-                                                    st.rerun()
-                                            else:
-                                                st.markdown("<div style='color:#94a3b8; font-size:12px; text-align:center; padding-top:10px;'>🔒 View Only</div>", unsafe_allow_html=True)
+```toml
+# SMTP Email Configuration
+SMTP_HOST = "smtp.gmail.com" # or your corporate SMTP
+SMTP_PORT = "587"
+SMTP_USERNAME = "your_email@company.com"
+SMTP_PASSWORD = "your_app_password"
+SMTP_FROM = "your_email@company.com"
+SMTP_USE_TLS = "true"
 
-                                        c1, c2, c3 = st.columns([2, 2, 1])
-                                        with c1:
-                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>THIS WEEK DELIVERED</div>", unsafe_allow_html=True)
-                                            st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('This Week Delivered','')) if str(row.get('This Week Delivered','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
-                                            st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Start: <b>{html_escape(row.get('Start date',''))}</b></div>", unsafe_allow_html=True)
-                                        with c2:
-                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>NEXT WEEK PRIORITY</div>", unsafe_allow_html=True)
-                                            st.markdown(f"<div style='font-size:15px; color:#344054;'>{html_escape(row.get('Next Week Priority','')) if str(row.get('Next Week Priority','')).strip() else '<i>None reported.</i>'}</div>", unsafe_allow_html=True)
-                                            st.markdown(f"<div style='font-size:13px; margin-top:7px; color:#667085;'>Expected Delivery: <b>{html_escape(row.get('Updated Expected Delivery date',''))}</b></div>", unsafe_allow_html=True)
-                                        with c3:
-                                            st.markdown("<div style='font-size:13px; font-weight:800; color:#344054;'>METRICS</div>", unsafe_allow_html=True)
-                                            st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between;'><span>Completion</span><b>{html_escape(row.get('Completion %',''))}</b></div>", unsafe_allow_html=True)
-                                            st.progress(get_pct_decimal(row.get('Completion %','')))
-                                            st.markdown(f"<div style='font-size:14px; display:flex; justify-content:space-between; margin-top:3px;'><span>Utilization</span><b>{html_escape(row.get('Utilization %',''))}</b></div>", unsafe_allow_html=True)
-                                            st.progress(get_pct_decimal(row.get('Utilization %','')))
-                                        
-                                        d_state = delivery_state(row)
-                                        d_flags = data_quality_flags(row)
-                                        if d_state.startswith("Overdue"):
-                                            st.markdown(f"<div class='risk-box' style='margin-top:10px'><div class='risk-title'>⏰ {html_escape(d_state)}</div><div class='risk-desc'>Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div></div>", unsafe_allow_html=True)
-                                        elif d_state.startswith("Due in"):
-                                            st.markdown(f"<div class='edit-banner' style='margin-top:10px'>📅 <b>{html_escape(d_state)}</b> · Expected delivery: {html_escape(row.get('Updated Expected Delivery date','N/A'))}</div>", unsafe_allow_html=True)
-                                        if d_flags:
-                                            st.markdown(f"<div class='edit-banner' style='margin-top:10px'>🧹 <b>Data quality:</b> {html_escape('; '.join(d_flags))}</div>", unsafe_allow_html=True)
+# Role-Based Invite Codes (Used in Registration)
+LEAD_PASSWORD = "your_secret_lead_code"
+ACCOUNT_PASSWORD = "your_secret_account_code"
+ADMIN_PASSWORD = "your_secret_admin_code"
 
-                                        if str(row.get("Blocker","")).strip().lower() not in ["none", "na", "n/a", ""]:
-                                            st.markdown(f"<div class='alert-card alert-danger' style='margin-top:14px; margin-bottom:0; background:#fef2f2; border-left:4px solid #dc2626; padding:10px;'><div class='alert-title' style='font-weight:bold; color:#b91c1c;'>⚠ Blocker</div><div class='alert-desc' style='font-size:13px; color:#450a0a;'>{html_escape(row.get('Blocker',''))}</div></div>", unsafe_allow_html=True)
-
-# =========================================================
-# VIEW 4: ACTION CENTER
-# =========================================================
-elif nav_selection == "🚦 Action Center":
-    if df.empty:
-        st.info("No data available. Go to the 'Enter Notes' tab to log your first update.")
-    elif not has_active_filters:
-        st.info("👋 Please apply one or more filters (e.g., Year, Month, Week, Account) to load the Action Center. This prevents overloading the view with organization-wide data.")
-    elif filtered_df.empty:
-        st.warning("No records match your selected filters.")
-    else:
-        action_items = build_action_items(filtered_df if not filtered_df.empty else df)
-        critical = [x for x in action_items if x["Priority"] == "Critical"]
-        attention = [x for x in action_items if x["Priority"] == "Attention"]
-        
-        a1, a2, a3, a4 = st.columns(4)
-        with a1: st.markdown(render_metric_card("CRITICAL", len(critical)), unsafe_allow_html=True)
-        with a2: st.markdown(render_metric_card("ATTENTION", len(attention)), unsafe_allow_html=True)
-        with a3: st.markdown(render_metric_card("OVERDUE", sum(1 for x in action_items if str(x["Delivery"]).startswith("Overdue"))), unsafe_allow_html=True)
-        with a4: st.markdown(render_metric_card("TOTAL FLAGGED", len(action_items)), unsafe_allow_html=True)
-        
-        st.markdown('<div class="section-header">Prioritized Work Items</div>', unsafe_allow_html=True)
-        if not action_items:
-            st.success("Everything is currently within the defined attention rules. 🎉")
-        else:
-            action_df = pd.DataFrame(action_items)
-            st.dataframe(action_df[["Priority","Project / Dashboard","Account","Team","Resource","Status","Delivery","Reason","Recommended Action"]], use_container_width=True, hide_index=True)
-            
-        st.markdown('<div class="section-header">Resource Health & Workload</div>', unsafe_allow_html=True)
-        resource_rows=[]
-        for resource, grp in (filtered_df if not filtered_df.empty else df).groupby("Resource"):
-            avg_c = int(round(sum(pct_value(x) for x in grp["Completion %"])/max(1,len(grp))))
-            avg_u = int(round(sum(pct_value(x) for x in grp["Utilization %"])/max(1,len(grp))))
-            criticals = sum(1 for _,r in grp.iterrows() if classify_attention(r)[0]=="Critical")
-            workload = "High" if avg_u >= 85 else ("Low" if avg_u < 50 else "Balanced")
-            resource_rows.append({"Resource":resource,"Projects":len(grp),"Avg Completion":f"{avg_c}%","Avg Utilization":f"{avg_u}%","Critical":criticals,"Workload":workload})
-        if resource_rows: 
-            st.dataframe(pd.DataFrame(resource_rows), use_container_width=True, hide_index=True)
-
-        st.markdown('<div class="section-header">Submission Compliance</div>', unsafe_allow_html=True)
-        scope_df = filtered_df if not filtered_df.empty else df
-        if not scope_df.empty:
-            compliance = scope_df.groupby("Resource").size().reset_index(name="Updates")
-            compliance["Coverage"] = compliance["Updates"].apply(lambda x: "Reported" if x else "Missing")
-            st.caption(f"Reporting coverage: {len(compliance)} resource(s) with at least one submitted update in the current selection.")
-            st.dataframe(compliance, use_container_width=True, hide_index=True)
-
-        st.markdown('<div class="section-header">Data Quality Checks</div>', unsafe_allow_html=True)
-        dq_records = []
-        for _, row in (filtered_df if not filtered_df.empty else df).iterrows():
-            flags = data_quality_flags(row)
-            if flags:
-                dq_records.append({"Project / Dashboard": row.get("Project / Dashboard",""), "Resource": row.get("Resource",""), "Status": row.get("Status",""), "Issues": "; ".join(flags)})
-        if dq_records:
-            st.dataframe(pd.DataFrame(dq_records), use_container_width=True, hide_index=True)
-        else:
-            st.success("No data-quality exceptions detected.")
+# GCP Service Account
+[gcp_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "your-key-id"
+private_key = "-----BEGIN PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END PRIVATE KEY-----\n"
+client_email = "your-service-account@your-project.iam.gserviceaccount.com"
+client_id = "your-client-id"
+auth_uri = "[https://accounts.google.com/o/oauth2/auth](https://accounts.google.com/o/oauth2/auth)"
+token_uri = "[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)"
+auth_provider_x509_cert_url = "[https://www.googleapis.com/oauth2/v1/certs](https://www.googleapis.com/oauth2/v1/certs)"
+client_x509_cert_url = "[https://www.googleapis.com/robot/v1/metadata/x509/your-service-account](https://www.googleapis.com/robot/v1/metadata/x509/your-service-account)"

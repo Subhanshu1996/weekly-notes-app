@@ -121,12 +121,20 @@ def send_email(subject, html_body, recipients, cc=None, pdf_bytes=None, pdf_name
         return True, f"Sent to {', '.join(recipients)}"
     except Exception as exc: return False, f"SMTP error: {exc}"
 
+def row_project_key(row):
+    return "|".join([
+        normalize_text(row.get("Account")),
+        normalize_text(row.get("Team")),
+        normalize_text(row.get("Resource")),
+        normalize_text(row.get("Project / Dashboard"))
+    ])
+
 def resource_utilization(df):
     if df.empty or "Resource" not in df.columns: return 0
     vals = []
     for _, group in df.groupby("Resource"):
         nums = [pct_value(v) for v in group["Utilization %"]]
-        if nums: vals.append(sum(nums)/len(nums))
+        if nums: vals.append(sum(nums))
     return int(round(sum(vals)/len(vals))) if vals else 0
 
 def missing_resources_for_schedule(schedule, notes_df, year, month, week):
@@ -148,8 +156,8 @@ def missing_resources_for_schedule(schedule, notes_df, year, month, week):
 # =========================================================
 def build_html_report(df, report_title, account, team):
     total_projects = len(df)
-    delivered = int((df["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not df.empty else 0
     avg_comp = int(df["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not df.empty else 0
+    avg_util = resource_utilization(df) if not df.empty else 0
     risks = int(((df["Status"].isin(["At Risk", "Blocked"])) | (df["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not df.empty else 0
     date_str = datetime.now(IST).strftime("%d %b %Y")
     account_team_str = f"{account} - {team}"
@@ -157,7 +165,6 @@ def build_html_report(df, report_title, account, team):
     table_rows = ""
     for _, row in df.iterrows():
         proj = html_escape(row.get("Project / Dashboard", ""))
-        owner = html_escape(row.get("Business Owner", ""))
         raw_name = str(row.get("Resource Name", "")).strip()
         if raw_name and raw_name.lower() not in ["none", "na", "n/a", "nan", ""]: res = html_escape(raw_name)
         else: res = html_escape(str(row.get("Resource", "")).strip().split('@')[0].replace('.', ' ').title())
@@ -173,18 +180,12 @@ def build_html_report(df, report_title, account, team):
 
         table_rows += f"""
         <tr>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b; word-break: break-word;">
-                <strong>{proj}</strong><br><span style="color: #64748b; font-size: 11px;">Owner: {owner}</span>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #1e293b;">
+                <strong>{proj}</strong><br><span style="color: #64748b; font-size: 10px;">{res}</span>
             </td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569; word-break: break-word;">{res}</td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">
-                <div style="font-size: 11px; font-weight: bold; color: #1e293b; margin-bottom: 4px;">{comp}%</div>
-                <div style="background-color: #e2e8f0; width: 100%; height: 6px; border-radius: 3px; overflow: hidden;">
-                    <div style="background-color: {status_color}; width: {comp}%; height: 100%;"></div>
-                </div>
-            </td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{due}</td>
-            <td style="padding: 14px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold; color: {status_color};">{status}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #1e293b; font-weight: bold;">{comp}%</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #475569;">{due}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: bold; color: {status_color};">{status}</td>
         </tr>
         """
 
@@ -201,107 +202,103 @@ def build_html_report(df, report_title, account, team):
             added_projects.add(proj)
             count += 1
                 
-    if count == 0: highlights_html = '<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives.</li>'
+    if count == 0: highlights_html = '<li><span style="color: #ea580c;">■</span> Routine progress tracking across all initiatives. No critical blocks reported.</li>'
             
     logo_src = "cid:factspan_logo" if os.path.exists("logo.png") else EMAIL_LOGO_URL
 
     return f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            @media only screen and (max-width: 600px) {{
-                .email-container {{ width: 100% !important; padding: 0 !important; }}
-                .mobile-stack {{ display: block !important; width: 100% !important; padding: 10px 0 !important; text-align: center !important; }}
-                .mobile-hide {{ display: none !important; }}
-                .kpi-box {{ display: block !important; width: 100% !important; margin-bottom: 10px !important; box-sizing: border-box; }}
-                .logo-img {{ margin: 0 auto !important; }}
-                .table-scroll {{ overflow-x: auto !important; display: block !important; width: 100% !important; }}
-                .responsive-table {{ min-width: 600px !important; }}
-                .footer-text {{ text-align: center !important; padding: 5px 0 !important; display: block !important; width: 100% !important; }}
-            }}
-        </style>
     </head>
-    <body style="margin: 0; padding: 20px; background-color: #f4f7fb;">
-        <div class="email-container" style="font-family: Arial, sans-serif; max-width: 850px; margin: 0 auto; background: #ffffff; border: 1px solid #dfe5ec;">
-            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 25px;">
-                <tr>
-                    <td class="mobile-stack" width="40%" valign="middle" align="left">
-                        <img src="{logo_src}" alt="FACTSPAN" width="200" class="logo-img" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold;" />
-                    </td>
-                    <td class="mobile-stack" width="60%" align="right" valign="middle">
-                        <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
-                        <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
-                        <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
-                    </td>
-                </tr>
-            </table>
-            <div style="border-top: 4px solid #ea580c;"></div>
-            <div style="padding: 25px;">
-                <p style="color: #334155; font-size: 14px; margin-top: 0;">Hi Team,</p>
-                <p style="color: #475569; font-size: 14px; line-height: 1.6; margin-bottom: 25px;">
-                    Please find below the latest weekly progress snapshot for <strong>{account_team_str}</strong>.
-                </p>
-                <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
-                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 25px;">
-                    <tr>
-                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
-                            <div style="font-size: 28px; font-weight: bold; color: #1e293b;">{total_projects}</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">PROJECTS</div>
-                        </td>
-                        <td class="mobile-hide" width="2%"></td>
-                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #f8fafc;">
-                            <div style="font-size: 28px; font-weight: bold; color: #16a34a;">{delivered}</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">UPDATES</div>
-                        </td>
-                        <td class="mobile-hide" width="2%"></td>
-                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fffbeb;">
-                            <div style="font-size: 28px; font-weight: bold; color: #ea580c;">{avg_comp}%</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">COMPLETION</div>
-                        </td>
-                        <td class="mobile-hide" width="2%"></td>
-                        <td class="kpi-box" width="23%" align="center" style="border: 1px solid #e2e8f0; padding: 20px 0; background: #fef2f2;">
-                            <div style="font-size: 28px; font-weight: bold; color: #dc2626;">{risks}</div>
-                            <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px;">RISKS</div>
-                        </td>
-                    </tr>
-                </table>
-                <div class="table-scroll">
-                    <table class="responsive-table" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border: 1px solid #e2e8f0; margin-bottom: 30px;">
-                        <thead>
-                            <tr style="background-color: #1e293b;">
-                                <th align="left" width="30%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">PROJECT / OWNER</th>
-                                <th align="left" width="20%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">RESOURCE</th>
-                                <th align="left" width="25%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">DELIVERY PROGRESS</th>
-                                <th align="left" width="15%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">TARGET DATE</th>
-                                <th align="left" width="10%" style="padding: 14px 12px; color: #ffffff; font-size: 11px; font-weight: bold; text-transform: uppercase;">STATUS</th>
-                            </tr>
-                        </thead>
-                        <tbody>{table_rows}</tbody>
+    <body style="margin: 0; padding: 0; background-color: #f4f7fb; font-family: Arial, sans-serif;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f7fb; padding: 20px 0;">
+            <tr>
+                <td align="center">
+                    <!--[if mso]>
+                    <table border="0" cellpadding="0" cellspacing="0" width="600"><tr><td>
+                    <![endif]-->
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border: 1px solid #dfe5ec; border-radius: 8px; overflow: hidden;">
+                        <tr>
+                            <td style="padding: 25px;">
+                                <img src="{logo_src}" alt="FACTSPAN" width="180" style="display: block; border: 0; color: #1e293b; font-size: 26px; font-weight: bold; margin-bottom: 20px;" />
+                                <div style="color: #ea580c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">WEEKLY PROJECT REPORT</div>
+                                <div style="font-size: 22px; color: #1e293b; margin: 4px 0 2px 0; font-weight: bold;">{account_team_str}</div>
+                                <div style="color: #64748b; font-size: 12px;">Weekly Progress Snapshot &bull; {date_str}</div>
+                            </td>
+                        </tr>
+                        <tr><td style="border-top: 4px solid #ea580c;"></td></tr>
+                        <tr>
+                            <td style="padding: 25px;">
+                                <p style="color: #334155; font-size: 14px; margin-top: 0; line-height: 1.6;">
+                                    Hi Team,<br><br>Please find below the latest weekly progress snapshot for <strong>{account_team_str}</strong>.
+                                </p>
+                                <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 12px; border-bottom: 2px solid #ea580c; padding-bottom: 5px; display: inline-block;">Portfolio Snapshot</h3>
+                                
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 25px;">
+                                    <tr>
+                                        <td align="center" width="25%" style="border: 1px solid #e2e8f0; padding: 15px 5px; background: #f8fafc;">
+                                            <div style="font-size: 20px; font-weight: bold; color: #1e293b;">{total_projects}</div>
+                                            <div style="font-size: 9px; color: #64748b; margin-top: 4px; text-transform: uppercase;">PROJECTS</div>
+                                        </td>
+                                        <td align="center" width="25%" style="border: 1px solid #e2e8f0; padding: 15px 5px; background: #fffbeb;">
+                                            <div style="font-size: 20px; font-weight: bold; color: #ea580c;">{avg_comp}%</div>
+                                            <div style="font-size: 9px; color: #64748b; margin-top: 4px; text-transform: uppercase;">COMPLETION</div>
+                                        </td>
+                                        <td align="center" width="25%" style="border: 1px solid #e2e8f0; padding: 15px 5px; background: #ecfdf5;">
+                                            <div style="font-size: 20px; font-weight: bold; color: #16a34a;">{avg_util}%</div>
+                                            <div style="font-size: 9px; color: #64748b; margin-top: 4px; text-transform: uppercase;">UTILIZATION</div>
+                                        </td>
+                                        <td align="center" width="25%" style="border: 1px solid #e2e8f0; padding: 15px 5px; background: #fef2f2;">
+                                            <div style="font-size: 20px; font-weight: bold; color: #dc2626;">{risks}</div>
+                                            <div style="font-size: 9px; color: #64748b; margin-top: 4px; text-transform: uppercase;">RISKS</div>
+                                        </td>
+                                    </tr>
+                                </table>
+                                
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; margin-bottom: 30px;">
+                                    <thead>
+                                        <tr style="background-color: #1e293b;">
+                                            <th align="left" style="padding: 10px; color: #ffffff; font-size: 11px;">PROJECT</th>
+                                            <th align="left" style="padding: 10px; color: #ffffff; font-size: 11px;">COMP.</th>
+                                            <th align="left" style="padding: 10px; color: #ffffff; font-size: 11px;">TARGET</th>
+                                            <th align="left" style="padding: 10px; color: #ffffff; font-size: 11px;">STATUS</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {table_rows}
+                                    </tbody>
+                                </table>
+                                
+                                <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px; margin-bottom: 30px;">
+                                    <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
+                                    <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.6;">
+                                        {highlights_html}
+                                    </ul>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background-color: #1e293b; padding: 15px 25px; color: #f1f5f9; font-size: 11px; text-align: center;">
+                                Factspan &bull; Staying Relevant and Ahead through Fluid Intelligence
+                            </td>
+                        </tr>
                     </table>
-                </div>
-                <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 20px; margin-bottom: 30px;">
-                    <h4 style="color: #0f172a; margin: 0 0 12px 0; font-size: 16px;">Key Updates & Actions</h4>
-                    <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.6;">
-                        {highlights_html}
-                    </ul>
-                </div>
-            </div>
-            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #1e293b; padding: 15px 25px;">
-                <tr>
-                    <td class="footer-text" align="left" style="color: #f1f5f9; font-size: 11px;">Factspan &bull; {account_team_str}</td>
-                    <td class="footer-text" align="right" style="color: #ea580c; font-size: 11px; font-weight: bold;">Staying Relevant and Ahead through Fluid Intelligence</td>
-                </tr>
-            </table>
-        </div>
+                    <!--[if mso]>
+                    </td></tr></table>
+                    <![endif]-->
+                </td>
+            </tr>
+        </table>
     </body>
     </html>
     """
 
 def build_pdf_report(dataframe, report_title, account, team):
     if not FPDF_AVAILABLE: return None
+
     account_team_str = f"{account} - {team}"
     date_str = datetime.now(IST).strftime("%d %b %Y, %I:%M %p")
 
@@ -340,11 +337,10 @@ def build_pdf_report(dataframe, report_title, account, team):
 
     total_projects = len(dataframe)
     total_resources = dataframe["Resource"].nunique() if not dataframe.empty and "Resource" in dataframe.columns else 0
-    delivered = int((dataframe["This Week Delivered"].fillna("").astype(str).str.strip() != "").sum()) if not dataframe.empty else 0
     avg_comp = int(dataframe["Completion %"].apply(lambda x: get_pct_decimal(x) * 100).mean()) if not dataframe.empty else 0
     risks = int(((dataframe["Status"].isin(["At Risk", "Blocked"])) | (dataframe["Blocker"].fillna("").astype(str).str.strip() != "")).sum()) if not dataframe.empty else 0
 
-    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("UPDATES", delivered), ("COMPLETION", f"{avg_comp}%"), ("RISKS", risks)]
+    kpis = [("PROJECTS", total_projects), ("RESOURCES", total_resources), ("COMPLETION", f"{avg_comp}%"), ("UTILIZATION", f"{resource_utilization(dataframe)}%"), ("RISKS", risks)]
     box_w = 33; gap = 3.75; y = 42
     for i, (label, value) in enumerate(kpis):
         x = 15 + i * (box_w + gap)
@@ -365,7 +361,7 @@ def build_pdf_report(dataframe, report_title, account, team):
     section("Executive Summary")
     pdf.set_x(15); pdf.set_text_color(52, 64, 84); pdf.set_font("Arial", "", 9.5)
     summary = (f"The selected report contains {total_projects} project update(s) across {total_resources} resource(s). "
-               f"{delivered} project(s) include a weekly delivery update. Average completion is {avg_comp}% and average utilization is {resource_utilization(dataframe)}%. "
+               f"Average completion is {avg_comp}% and average total resource utilization is {resource_utilization(dataframe)}%. "
                f"There are {risks} item(s) requiring risk or blocker attention.")
     pdf.multi_cell(180, 5.8, safe_pdf_text(summary))
 
